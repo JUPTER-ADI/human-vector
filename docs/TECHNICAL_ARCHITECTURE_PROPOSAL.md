@@ -4,7 +4,7 @@
 
 This document is the complete audited technical architecture accepted by decision `D-015` on 2026-08-02. The human explicitly approved `D-015` after reviewing this complete proposal; the four-document change set comprising this file, [DECISION_LOG.md](./DECISION_LOG.md), [IMPLEMENTATION_PLAN.md](./IMPLEMENTATION_PLAN.md), and [COMPETITION_REQUIREMENTS.md](./COMPETITION_REQUIREMENTS.md); and the architecture boundaries, risks, rejected and deferred alternatives, approval gates, and exact six-part compatibility-spike scope.
 
-Acceptance selects the documented minimum technical architecture. It does not alter or supersede accepted decision `D-014`, represent any component as implemented, authorize application implementation, or authorize or execute the compatibility spike. The six-part spike remains separately blocked pending explicit human authorization. Application code, packages, dependencies, configuration, environment variables, databases, cloud accounts, AWS or CockroachDB resources, and deployment work remain unchanged and unauthorized.
+Acceptance selects the documented minimum technical architecture. It does not alter or supersede accepted decision `D-014`, represent any component as implemented, or authorize application implementation. Decision `D-016`, accepted separately on 2026-08-02, authorizes only the exact six-part compatibility spike in section H. This documentation task does not execute that spike. Application code and all work outside the bounded spike remain unchanged and unauthorized.
 
 ## A. Verified repository facts
 
@@ -147,10 +147,10 @@ This provides a judge-visible, application-time agent action attributable to the
 
 ## G. Approval gates
 
-The following gates are cumulative. Only the architecture decision gate is satisfied by the human approval recorded here:
+The following gates are cumulative. The architecture and bounded spike-authorization gates are satisfied; the spike-evidence and all later gates remain unsatisfied:
 
-1. **Architecture decision gate — SATISFIED:** on 2026-08-02, the human accepted `D-015` after the complete review recorded above. This selects the architecture but authorizes neither the compatibility spike nor implementation.
-2. **Compatibility-spike gate — BLOCKED:** the human must separately authorize the bounded spike in section H. No production feature work or permanent cloud environment is part of that spike.
+1. **Architecture decision gate — SATISFIED:** on 2026-08-02, the human accepted `D-015` after the complete review recorded above. This selects the architecture but does not authorize application implementation.
+2. **Compatibility-spike authorization gate — SATISFIED:** on 2026-08-02, the human accepted `D-016`, authorizing only the bounded six checks in section H. The spike has not been executed. No production feature work or permanent cloud environment is part of that authorization.
 3. **Spike-evidence gate:** the six checks in section H pass with versioned, non-secret evidence. Any material failure returns the affected choice to proposal/review; it is not silently worked around.
 4. **Physical-design gate:** schema/migrations, runtime roles, retry/idempotency behavior, model output schemas, skill commit/hash, deployment packaging, and secret/network boundaries receive review before core implementation.
 5. **Local protocol gate:** the complete fictional workflow and all P0 authority/transfer/provenance tests pass locally before authentication or public-deployment work is treated as complete.
@@ -162,17 +162,19 @@ The following gates are cumulative. Only the architecture decision gate is satis
 
 ## H. Reversible first compatibility spike
 
-The first post-acceptance action remains a bounded, disposable compatibility spike. It has **not** been authorized or executed. Acceptance of `D-015` is not authorization for the spike; it may begin only after a separate explicit human authorization. It must use fictional test data, record no secrets, make no production claim, and test only:
+Decision `D-016` explicitly authorizes this bounded, disposable compatibility spike. It has **not** been executed. Authorization is limited to fictional test data and only these six checks:
 
 1. Node.js 22 plus `pg` TLS connectivity with full server-certificate verification to a disposable CockroachDB Cloud Basic target.
-2. CockroachDB retry behavior, including an observed SQLSTATE `40001`, whole-transaction retry, bounded failure, and no duplicate logical authority event under one idempotency key.
+2. CockroachDB transaction-retry behavior, including an observed SQLSTATE `40001`, whole-transaction retry, bounded failure, and no duplicate logical authority event under one idempotency key.
 3. Titan Text Embeddings V2 invoked with `dimensions: 1024`, with validation that the returned vector contains exactly 1,024 finite numeric values.
-4. Creation and actual use of a project-filtered cosine Distributed Vector Index on `VECTOR(1024)`, evidenced by a query constrained to one `project_id`, cosine ordering, isolation fixtures, and an `EXPLAIN` plan showing index use.
+4. Creation and actual use of a project-filtered cosine Distributed Vector Index on `VECTOR(1024)`, with project isolation, cosine ordering, isolation fixtures, and `EXPLAIN` evidence showing index use.
 5. Nova 2 Lite output-validation behavior through the suitable EU geographic inference profile, including valid, malformed, quarantined, retry, and terminal-failure paths without any authority transition.
 6. Packaging of the unchanged Next.js production server for a disposable single-instance Elastic Beanstalk Node.js 22 environment, proving build, startup, health, and a basic server response without adding deployment architecture to the application.
 
-The spike is a compatibility test, not application implementation authorization. Its evidence must be reviewed by the human, and subsequent application implementation still requires separate explicit authorization.
+The authorization makes no production claim and permits no permanent architecture expansion, full domain mapping, application implementation, public deployment, authentication implementation, or irreversible or production resource. Any external resource, account configuration, credential entry, paid action, or package installation not already safely available must be separately reported before execution. A failed prerequisite must stop the affected check and be reported honestly; it must not be silently bypassed.
+
+The spike is a compatibility test, not application implementation authorization. Its evidence must be reviewed by the human, and subsequent application implementation still requires separate explicit authorization. `D-016` does not modify, supersede, or reinterpret `D-014` or `D-015`, and no check may create an authority transition.
 
 STATUS: ACCEPTED
 IMPLEMENTATION: BLOCKED PENDING SEPARATE EXPLICIT HUMAN AUTHORIZATION
-COMPATIBILITY SPIKE: BLOCKED PENDING SEPARATE EXPLICIT HUMAN AUTHORIZATION
+COMPATIBILITY SPIKE: AUTHORIZED BY D-016 — NOT EXECUTED

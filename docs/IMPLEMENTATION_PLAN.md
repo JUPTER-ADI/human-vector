@@ -6,7 +6,7 @@ Implement the smallest end-to-end fictional project that conforms to the complet
 
 Before changing Next.js code, read the relevant version-specific guides in `node_modules/next/dist/docs/`, as required by `AGENTS.md`. No technical choice marked **TBD** in this plan may be treated as implicitly selected through coding convenience.
 
-**Current authorization status:** Decision `D-015` and [TECHNICAL_ARCHITECTURE_PROPOSAL.md](./TECHNICAL_ARCHITECTURE_PROPOSAL.md) now record the accepted minimum technical architecture. Architecture acceptance is not execution authority. No implementation phase, compatibility spike, package/dependency change, configuration change, database work, CockroachDB or AWS resource work, or deployment work may begin under this approval. The exact six-part compatibility spike remains separately blocked pending explicit human authorization; application implementation requires later explicit authorization after the required compatibility evidence is reviewed.
+**Current authorization status:** Decision `D-015` and [TECHNICAL_ARCHITECTURE_PROPOSAL.md](./TECHNICAL_ARCHITECTURE_PROPOSAL.md) record the accepted minimum technical architecture. Decision `D-016` separately authorizes only the exact six-part compatibility spike in section H of that document. The spike has not been executed in this documentation task. Application implementation remains blocked pending review of the required compatibility evidence and separate explicit human authorization.
 
 ## 2. Repository baseline
 
@@ -21,7 +21,7 @@ The repository is a minimal `create-next-app` scaffold:
 
 The protocol specification consists of `PROJECT_CONTEXT.md` plus the ten documents indexed there. `PROTOCOL_CORE.md`, `COGNITIVE_PROVENANCE.md`, `MEMORY_ARCHITECTURE.md`, `SECURITY_AND_BOUNDARIES.md`, and `ACCEPTANCE_TESTS.md` define implementation invariants and evidence, not optional guidance.
 
-## 3. D-014 and D-015 accepted — execution still blocked
+## 3. D-014, D-015, and D-016 accepted — application implementation still blocked
 
 The **database-neutral protocol domain model and authority boundary** are specified in [DOMAIN_MODEL.md](./DOMAIN_MODEL.md) and [HUMAN_AUTHORITY_BOUNDARY.md](./HUMAN_AUTHORITY_BOUNDARY.md), and recorded as accepted decision `D-014` in [DECISION_LOG.md](./DECISION_LOG.md).
 
@@ -29,7 +29,8 @@ The **database-neutral protocol domain model and authority boundary** are specif
 - [x] The mandatory logical prerequisite for coding is complete.
 - [x] `D-014` no longer blocks coding on logical-domain or authority-contract grounds.
 - [x] The human explicitly approved `D-015` and the complete minimum technical architecture, boundaries, risks, alternatives, gates, and spike scope.
-- [ ] The six-part compatibility spike has not been authorized or executed.
+- [x] The human explicitly authorized only the exact six-part compatibility spike through accepted decision `D-016`.
+- [ ] The authorized compatibility spike has not been executed and has produced no evidence.
 - [ ] Application implementation remains blocked pending required compatibility evidence and separate, explicit human authorization.
 
 The accepted contract—not a database-library selection—includes:
@@ -43,7 +44,9 @@ The accepted contract—not a database-library selection—includes:
 - permitted state transitions and human-only command authorization;
 - idempotency, stale-version conflict, retry, correction, and failure semantics.
 
-The `D-014` approval evidence is the human's explicit acceptance after review of the two domain/authority documents and their mapping to the P0 tests in `ACCEPTANCE_TESTS.md`, including the separate critique-disposition and `FIN-*` branches. The `D-015` approval evidence is the human's explicit acceptance after reviewing the complete technical proposal and all four documentation changes, including its boundaries, risks, rejected/deferred alternatives, approval gates, and exact six-part spike. `D-015` does not alter or supersede `D-014`. Neither decision authorizes the compatibility spike or application implementation.
+The `D-014` approval evidence is the human's explicit acceptance after review of the two domain/authority documents and their mapping to the P0 tests in `ACCEPTANCE_TESTS.md`, including the separate critique-disposition and `FIN-*` branches. The `D-015` approval evidence is the human's explicit acceptance after reviewing the complete technical proposal and all four documentation changes, including its boundaries, risks, rejected/deferred alternatives, approval gates, and exact six-part spike. `D-016` separately authorizes only that exact spike. It does not modify, supersede, or reinterpret `D-014` or `D-015`, and it does not authorize application implementation.
+
+The spike must use fictional data and may make no production claim. It authorizes no permanent architecture expansion, full domain mapping, public deployment, authentication implementation, or irreversible or production resource. Any external resource, account configuration, credential entry, paid action, or package installation not already safely available must be separately reported before execution. A failed prerequisite stops the affected check and must be reported honestly rather than bypassed.
 
 ## 4. Mandatory MVP implementation sequence
 
@@ -61,7 +64,7 @@ The `D-014` approval evidence is the human's explicit acceptance after review of
 1. Validate the `D-015`-accepted `pg`, TLS-verification, bounded-pool, and whole-transaction retry strategy against the actual Node.js 22 and CockroachDB boundary.
 2. Design the physical mapping for the `D-015`-accepted numbered, reviewable, forward SQL migration method without weakening append-only history or least privilege.
 3. Validate the `D-015`-accepted Titan Text Embeddings V2 output at exactly 1,024 dimensions and project-filtered cosine Distributed Vector Index against the actual services.
-4. Only after separate explicit human authorization, run the bounded six-part compatibility spike in [TECHNICAL_ARCHITECTURE_PROPOSAL.md](./TECHNICAL_ARCHITECTURE_PROPOSAL.md). `D-015` acceptance and this plan do not authorize or execute it.
+4. Under the bounded authorization in `D-016`, run only the exact six-part compatibility spike in [TECHNICAL_ARCHITECTURE_PROPOSAL.md](./TECHNICAL_ARCHITECTURE_PROPOSAL.md) after all required prerequisites have been safely established or separately reported. This plan records no execution or evidence.
 5. Map logical records to a schema that preserves immutable versions, append-only provenance, item-level dispositions, manifests, retrieval evidence, and transactional authority actions.
 
 **Exit evidence:** recorded decisions, reproducible migrations, server-only secret boundary, persistence/reload proof, executed vector query against fictional fixtures, and applicable `MEM-*`/`PROV-*` tests.
@@ -195,18 +198,18 @@ Optional work must not weaken authority, isolation, provenance, memory eligibili
 
 | Decision | Status after `D-015` acceptance | Required open validation or decision |
 |---|---|---|
-| CockroachDB client/connection (`D-101`) | Accepted: `pg`, bounded pool, verify-full TLS, transaction retries | Node.js/Next.js compatibility, pooling/failure, secrets; spike unauthorized |
+| CockroachDB client/connection (`D-101`) | Accepted: `pg`, bounded pool, verify-full TLS, transaction retries | Node.js/Next.js compatibility, pooling/failure, secrets; spike authorized by `D-016`, not executed |
 | Schema/migration method (`D-102`) | Accepted: numbered reviewable forward SQL migrations | Physical mapping, reproducibility, forward-fix and deployment procedure |
-| Vector/embedding implementation (`D-103`) | Accepted: `VECTOR(1024)`, prefixed cosine DVI, Titan V2 at 1,024 | Actual Basic/index/model compatibility, query plan, fixture relevance, privacy; spike unauthorized |
-| AI provider/model boundary (`D-104`) | Accepted: Nova 2 Lite via suitable EU geographic inference profile | Live access/region, retention, retry, schema validation, secrets; spike unauthorized |
-| AWS service/architecture (`D-105`) | Accepted: single-instance Elastic Beanstalk Node.js 22 in `eu-central-1` plus Bedrock | Packaging, runtime/network fit, observability, cost, cleanup; spike/deployment unauthorized |
+| Vector/embedding implementation (`D-103`) | Accepted: `VECTOR(1024)`, prefixed cosine DVI, Titan V2 at 1,024 | Actual Basic/index/model compatibility, query plan, fixture relevance, privacy; spike authorized by `D-016`, not executed |
+| AI provider/model boundary (`D-104`) | Accepted: Nova 2 Lite via suitable EU geographic inference profile | Live access/region, retention, retry, schema validation, secrets; spike authorized by `D-016`, not executed |
+| AWS service/architecture (`D-105`) | Accepted: single-instance Elastic Beanstalk Node.js 22 in `eu-central-1` plus Bedrock | Packaging, runtime/network fit, observability, cost, cleanup; bounded disposable spike authorized by `D-016`, not executed; public/production deployment unauthorized |
 | Test harness (`D-106`) | `TBD` | Select domain, integration, and end-to-end coverage tooling |
 | Authentication/actor identity (`D-107`) | `TBD`; sequencing constraint accepted | Select Cognito or equivalent and define server attestation before public authority actions |
 | Retention/deletion/export/admin access (`D-108`) | `TBD` | Privacy, backup/recovery, and append-only tension |
 | Competition eligibility/legal mapping (`D-109`) | `TBD` | Participant eligibility, legal terms, owner, and sponsor evidence |
 | Public license/publication plan (`D-110`) | `TBD` | Attribution, secret/history scan, exact release/deployed revision |
 
-`D-014` remains the accepted logical prerequisite and controlling human-authority boundary. `D-015` accepts the documented minimum architecture and resolves the selections tracked by `D-101` through `D-105`, but not their compatibility evidence. `D-106` through `D-110` remain open as shown. Cognito or a separately accepted equivalent may follow proof of the complete local fictional workflow, but it is mandatory before public deployment or remotely reachable human-authority actions. No row in this table authorizes implementation or the compatibility spike.
+`D-014` remains the accepted logical prerequisite and controlling human-authority boundary. `D-015` accepts the documented minimum architecture and resolves the selections tracked by `D-101` through `D-105`, but not their compatibility evidence. `D-016` authorizes only the exact six-part compatibility spike and records no result. `D-106` through `D-110` remain open as shown. Cognito or a separately accepted equivalent may follow proof of the complete local fictional workflow, but it is mandatory before public deployment or remotely reachable human-authority actions. No row in this table authorizes application implementation.
 
 ## 8. Cross-cutting risks and required controls
 

@@ -132,14 +132,35 @@ Each future entry should include ID/date/status/deciders, context, decision, rat
 - **Validation/evidence:** Human review and explicit approval establish the architecture decision. The bounded six-part compatibility spike has not been authorized or executed. Repository and official-source facts remain separated from live-account and compatibility assumptions in the accepted proposal.
 - **Supersession:** None. `D-015` does not alter or supersede `D-014`; `D-014` remains the controlling domain and human-authority contract.
 
-## 5. Accepted choices with open validation and remaining decisions
+## 5. Accepted compatibility-spike authorization
+
+### D-016 — Bounded D-015 compatibility spike authorization
+
+- **Date:** 2026-08-02
+- **Status:** ACCEPTED
+- **Decider:** Human
+- **Approval:** On 2026-08-02, the human explicitly authorized the bounded six-part compatibility spike defined in section H of [TECHNICAL_ARCHITECTURE_PROPOSAL.md](./TECHNICAL_ARCHITECTURE_PROPOSAL.md) and accepted by `D-015` as the reversible first compatibility test.
+- **Context:** `D-015` accepted the minimum competition technical architecture but deliberately withheld authorization to execute its compatibility spike. This separate decision supplies only that bounded authorization. It does not modify, supersede, or reinterpret either `D-014` or `D-015`.
+- **Decision:** Authorize only the following six compatibility checks, using fictional test data:
+  1. Node.js 22 plus `pg` TLS connectivity with full server-certificate verification to a disposable CockroachDB Cloud Basic target.
+  2. CockroachDB transaction-retry behavior, including observed SQLSTATE `40001`, whole-transaction retry, bounded failure, and no duplicate logical authority event under one idempotency key.
+  3. Amazon Titan Text Embeddings V2 invoked with exactly 1,024 dimensions, validating that the returned vector contains exactly 1,024 finite numeric values.
+  4. Creation and actual use of a project-filtered cosine Distributed Vector Index on `VECTOR(1024)`, with project isolation, cosine ordering, isolation fixtures, and `EXPLAIN` evidence showing index use.
+  5. Amazon Nova 2 Lite output-validation behavior through the suitable EU geographic inference profile, including valid, malformed, quarantined, retry, and terminal-failure paths without any authority transition.
+  6. Packaging of the unchanged Next.js production server for a disposable single-instance Elastic Beanstalk Node.js 22 environment, proving build, startup, health, and a basic server response without adding deployment architecture to the application.
+- **Authorization boundary:** This authorization permits compatibility testing only. It authorizes no production claim, permanent architecture expansion, full domain mapping, application implementation, public deployment, authentication implementation, or irreversible or production resource. Any external resource, account configuration, credential entry, paid action, or package installation not already safely available must be separately reported before execution. A failed prerequisite stops the affected check and must be reported honestly; it must not be silently bypassed.
+- **Consequences:** The six checks may be executed only within this exact boundary. Their results remain evidence to be reviewed, not proof of production readiness and not authorization for later application implementation. All `D-014` human-authority constraints remain controlling, including the prohibition on any AI or system-created authority transition.
+- **Validation/evidence:** This documentation change records authorization only. The compatibility spike was not executed, no evidence was produced, and no application, dependency, configuration, runtime, environment-variable, database, CockroachDB, AWS, cloud-account, or deployment change occurred in this task.
+- **Supersession:** None. `D-016` does not alter, supersede, or reinterpret `D-014` or `D-015`.
+
+## 6. Accepted choices with open validation and remaining decisions
 
 ### D-101 — CockroachDB client and connection strategy
 
 - **Status:** ACCEPTED
 - **Resolved by:** `D-015`
 - **Decision:** Use Node.js `pg`, a small bounded pool, verify-full TLS, whole-transaction SQLSTATE `40001` retry handling, and the server boundary defined by `D-014`.
-- **Open validation:** Node.js 22/Next.js compatibility, live TLS connectivity, retry/failure behavior, secret handling, pooling limits, and operational constraints remain unverified. The relevant compatibility-spike checks are not authorized.
+- **Open validation:** Node.js 22/Next.js compatibility, live TLS connectivity, retry/failure behavior, secret handling, pooling limits, and operational constraints remain unverified. The relevant compatibility-spike checks are authorized by `D-016` but have not been executed.
 
 ### D-102 — Schema migration method
 
@@ -153,21 +174,21 @@ Each future entry should include ID/date/status/deciders, context, decision, rat
 - **Status:** ACCEPTED
 - **Resolved by:** `D-015`
 - **Decision:** Use CockroachDB `VECTOR(1024)`, a `project_id`-prefixed `vector_cosine_ops` Distributed Vector Index, cosine retrieval, and Amazon Bedrock Titan Text Embeddings V2 explicitly requested and validated at exactly 1,024 dimensions, with relational eligibility filters and human-controlled context selection.
-- **Open validation:** Live Basic-cluster capability, actual index creation/use, optimizer plan, Titan account/region access and exact output, fictional relevance behavior, indexing lifecycle, cost, and privacy remain open. The relevant compatibility-spike checks are not authorized.
+- **Open validation:** Live Basic-cluster capability, actual index creation/use, optimizer plan, Titan account/region access and exact output, fictional relevance behavior, indexing lifecycle, cost, and privacy remain open. The relevant compatibility-spike checks are authorized by `D-016` but have not been executed.
 
 ### D-104 — Agent provider and model boundary
 
 - **Status:** ACCEPTED
 - **Resolved by:** `D-015`
 - **Decision:** Use Amazon Nova 2 Lite through the suitable EU geographic inference profile for separate Builder, Independent Critic, Reconstruction, and Retrieval Safety executions, with immutable manifests, versioned instructions, application-side output validation, and no human-authority tool capability.
-- **Open validation:** Live account/model access, source/destination region behavior, quotas, terms, latency, output-validation/retry behavior, retention, server-only secret handling, and malformed-output recovery remain open. The relevant compatibility-spike check is not authorized.
+- **Open validation:** Live account/model access, source/destination region behavior, quotas, terms, latency, output-validation/retry behavior, retention, server-only secret handling, and malformed-output recovery remain open. The relevant compatibility-spike check is authorized by `D-016` but has not been executed.
 
 ### D-105 — AWS service and deployment architecture
 
 - **Status:** ACCEPTED
 - **Resolved by:** `D-015`
 - **Decision:** Use a single-instance AWS Elastic Beanstalk Node.js 22 environment in `eu-central-1` for the existing full-stack Next.js application, with Amazon Bedrock providing the selected model and embedding services.
-- **Open validation:** Live account availability, current platform version, unchanged Next.js server packaging, instance/network/TLS/secret/log behavior, CockroachDB allowlisting, health evidence, cost, cleanup, and reproducible deployment remain open. The relevant compatibility-spike check is not authorized and no deployment is authorized.
+- **Open validation:** Live account availability, current platform version, unchanged Next.js server packaging, instance/network/TLS/secret/log behavior, CockroachDB allowlisting, health evidence, cost, cleanup, and reproducible deployment remain open. The bounded disposable packaging check is authorized by `D-016` but has not been executed; no public or production deployment is authorized.
 
 ### D-106 — Test harness
 
@@ -200,6 +221,6 @@ Each future entry should include ID/date/status/deciders, context, decision, rat
 - **Decision needed:** Choose license, third-party attribution process, history/secret review, release tag, and judge access method.
 - **Evidence required:** License and notices, clean scans, exact deployed revision.
 
-## 6. Decision discipline
+## 7. Decision discipline
 
 An open choice MUST remain visibly TBD in plans, UI copy, and competition claims. Implementation convenience is not implicit acceptance. Any selected option must document tradeoffs against protocol invariants—especially human authority, thread isolation, provenance integrity, memory evidence, security, and reproducibility.
