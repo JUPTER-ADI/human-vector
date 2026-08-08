@@ -1,0 +1,280 @@
+from .states import HumanVectorState as S
+
+
+ALLOWED_TRANSITIONS = {
+    S.SESSION_CREATED: frozenset({
+        S.DIRECTION_DRAFT,
+        S.SESSION_CANCELLED,
+    }),
+    S.SESSION_CANCELLED: frozenset({
+        S.SESSION_ARCHIVED,
+    }),
+
+    S.DIRECTION_DRAFT: frozenset({
+        S.DIRECTION_VALIDATION_REQUIRED,
+        S.SESSION_PAUSED,
+        S.SESSION_CANCELLED,
+    }),
+    S.DIRECTION_VALIDATION_REQUIRED: frozenset({
+        S.DIRECTION_DRAFT,
+        S.DIRECTION_CONFIRMATION_REQUIRED,
+        S.TECHNICAL_ERROR,
+    }),
+    S.DIRECTION_CONFIRMATION_REQUIRED: frozenset({
+        S.DIRECTION_LOCKED,
+        S.DIRECTION_DRAFT,
+        S.SESSION_PAUSED,
+        S.SESSION_CANCELLED,
+    }),
+    S.DIRECTION_LOCKED: frozenset({
+        S.BUILDER_V1_PACKAGE_PREPARATION,
+    }),
+
+    S.BUILDER_V1_PACKAGE_PREPARATION: frozenset({
+        S.BUILDER_V1_READY,
+        S.TECHNICAL_ERROR,
+    }),
+    S.BUILDER_V1_READY: frozenset({
+        S.BUILDER_V1_RUNNING,
+        S.TECHNICAL_ERROR,
+    }),
+    S.BUILDER_V1_RUNNING: frozenset({
+        S.V1_GENERATED,
+        S.AI_OPERATION_FAILED,
+    }),
+    S.V1_GENERATED: frozenset({
+        S.HUMAN_RESPONSE_REQUIRED,
+    }),
+
+    S.HUMAN_RESPONSE_REQUIRED: frozenset({
+        S.HUMAN_RESPONSE_DRAFT,
+        S.SESSION_PAUSED,
+    }),
+    S.HUMAN_RESPONSE_DRAFT: frozenset({
+        S.HUMAN_RESPONSE_CONFIRMATION_REQUIRED,
+        S.SESSION_PAUSED,
+    }),
+    S.HUMAN_RESPONSE_CONFIRMATION_REQUIRED: frozenset({
+        S.HUMAN_RESPONSE_CAPTURED,
+        S.HUMAN_RESPONSE_DRAFT,
+    }),
+    S.HUMAN_RESPONSE_CAPTURED: frozenset({
+        S.CRITIC_PACKAGE_PREPARATION,
+    }),
+
+    S.CRITIC_PACKAGE_PREPARATION: frozenset({
+        S.CRITIC_READY,
+        S.TECHNICAL_ERROR,
+    }),
+    S.CRITIC_READY: frozenset({
+        S.CRITIC_RUNNING,
+        S.TECHNICAL_ERROR,
+    }),
+    S.CRITIC_RUNNING: frozenset({
+        S.CRITIC_REVIEW_GENERATED,
+        S.AI_OPERATION_FAILED,
+    }),
+    S.CRITIC_REVIEW_GENERATED: frozenset({
+        S.CONFLICT_SPACE_READY,
+    }),
+    S.CONFLICT_SPACE_READY: frozenset({
+        S.HUMAN_CRITIC_SELECTION,
+    }),
+
+    S.HUMAN_CRITIC_SELECTION: frozenset({
+        S.CRITIC_CLARIFICATION_REQUIRED,
+        S.MANUAL_TRANSFER_PREPARATION,
+        S.SESSION_PAUSED,
+    }),
+    S.CRITIC_CLARIFICATION_REQUIRED: frozenset({
+        S.CRITIC_RUNNING,
+        S.HUMAN_CRITIC_SELECTION,
+        S.SESSION_PAUSED,
+    }),
+
+    S.MANUAL_TRANSFER_PREPARATION: frozenset({
+        S.MANUAL_TRANSFER_IN_PROGRESS,
+    }),
+    S.MANUAL_TRANSFER_IN_PROGRESS: frozenset({
+        S.TRANSFER_CONFIRMATION_REQUIRED,
+        S.HUMAN_CRITIC_SELECTION,
+        S.SESSION_PAUSED,
+    }),
+    S.TRANSFER_CONFIRMATION_REQUIRED: frozenset({
+        S.TRANSFER_PACKAGE_LOCKED,
+        S.MANUAL_TRANSFER_IN_PROGRESS,
+    }),
+    S.TRANSFER_PACKAGE_LOCKED: frozenset({
+        S.MEMORY_RETRIEVAL_READY,
+    }),
+
+    S.MEMORY_RETRIEVAL_READY: frozenset({
+        S.MEMORY_RETRIEVAL_RUNNING,
+        S.TECHNICAL_ERROR,
+    }),
+    S.MEMORY_RETRIEVAL_RUNNING: frozenset({
+        S.MEMORY_REVIEW_REQUIRED,
+        S.NO_RELEVANT_MEMORY,
+        S.MEMORY_RETRIEVAL_FAILED,
+    }),
+    S.MEMORY_REVIEW_REQUIRED: frozenset({
+        S.MEMORY_SELECTION_CONFIRMATION_REQUIRED,
+        S.MEMORY_RETRIEVAL_READY,
+        S.SESSION_PAUSED,
+    }),
+    S.MEMORY_SELECTION_CONFIRMATION_REQUIRED: frozenset({
+        S.MEMORY_SELECTION_LOCKED,
+        S.MEMORY_REVIEW_REQUIRED,
+    }),
+    S.MEMORY_SELECTION_LOCKED: frozenset({
+        S.RECONSTRUCTION_PACKAGE_PREPARATION,
+    }),
+    S.NO_RELEVANT_MEMORY: frozenset({
+        S.RECONSTRUCTION_PACKAGE_PREPARATION,
+    }),
+
+    S.RECONSTRUCTION_PACKAGE_PREPARATION: frozenset({
+        S.RECONSTRUCTION_PACKAGE_CONFIRMATION_REQUIRED,
+        S.TECHNICAL_ERROR,
+    }),
+    S.RECONSTRUCTION_PACKAGE_CONFIRMATION_REQUIRED: frozenset({
+        S.RECONSTRUCTION_PACKAGE_READY,
+        S.RECONSTRUCTION_PACKAGE_PREPARATION,
+        S.MANUAL_TRANSFER_PREPARATION,
+        S.MEMORY_REVIEW_REQUIRED,
+        S.SESSION_PAUSED,
+    }),
+    S.RECONSTRUCTION_PACKAGE_READY: frozenset({
+        S.RECONSTRUCTION_RUNNING,
+        S.TECHNICAL_ERROR,
+    }),
+    S.RECONSTRUCTION_RUNNING: frozenset({
+        S.VN_GENERATED,
+        S.AI_OPERATION_FAILED,
+    }),
+    S.VN_GENERATED: frozenset({
+        S.VERSION_COMPARISON_READY,
+    }),
+
+    S.VERSION_COMPARISON_READY: frozenset({
+        S.VERSION_COMPARISON_GENERATED,
+    }),
+    S.VERSION_COMPARISON_GENERATED: frozenset({
+        S.HUMAN_VERIFICATION_REQUIRED,
+    }),
+    S.HUMAN_VERIFICATION_REQUIRED: frozenset({
+        S.ITERATION_DECISION_REQUIRED,
+        S.DIRECTION_REVISION_REQUIRED,
+        S.BRANCH_CREATION_REQUIRED,
+        S.VF_CONFIRMATION_REQUIRED,
+        S.SESSION_PAUSED,
+    }),
+    S.ITERATION_DECISION_REQUIRED: frozenset({
+        S.HUMAN_RESPONSE_REQUIRED,
+        S.CRITIC_PACKAGE_PREPARATION,
+        S.HUMAN_CRITIC_SELECTION,
+        S.MANUAL_TRANSFER_PREPARATION,
+        S.MEMORY_RETRIEVAL_READY,
+        S.RECONSTRUCTION_PACKAGE_PREPARATION,
+    }),
+
+    S.DIRECTION_REVISION_REQUIRED: frozenset({
+        S.DIRECTION_DRAFT,
+        S.HUMAN_VERIFICATION_REQUIRED,
+    }),
+    S.BRANCH_CREATION_REQUIRED: frozenset({
+        S.BRANCH_CREATED,
+        S.HUMAN_VERIFICATION_REQUIRED,
+    }),
+    S.BRANCH_CREATED: frozenset({
+        S.HUMAN_RESPONSE_REQUIRED,
+        S.CRITIC_PACKAGE_PREPARATION,
+        S.RECONSTRUCTION_PACKAGE_PREPARATION,
+    }),
+
+    S.VF_CONFIRMATION_REQUIRED: frozenset({
+        S.VF_HUMAN_DECLARATION,
+    }),
+    S.VF_HUMAN_DECLARATION: frozenset({
+        S.VF_DECLARED,
+        S.HUMAN_VERIFICATION_REQUIRED,
+    }),
+    S.VF_DECLARED: frozenset({
+        S.VF_LOCKING_IN_PROGRESS,
+    }),
+    S.VF_LOCKING_IN_PROGRESS: frozenset({
+        S.VF_LOCKED,
+        S.TECHNICAL_ERROR,
+    }),
+    S.VF_LOCKED: frozenset({
+        S.FINAL_REPORT_GENERATION,
+    }),
+
+    S.FINAL_REPORT_GENERATION: frozenset({
+        S.FINAL_REPORT_READY,
+        S.TECHNICAL_ERROR,
+    }),
+    S.FINAL_REPORT_READY: frozenset({
+        S.SESSION_ARCHIVED,
+    }),
+    S.SESSION_ARCHIVED: frozenset(),
+
+    # Context-dependent transitions:
+    # SESSION_PAUSED -> last valid state
+    S.SESSION_PAUSED: frozenset(),
+
+    S.TECHNICAL_ERROR: frozenset({
+        S.RECOVERY_REQUIRED,
+        S.SESSION_PAUSED,
+    }),
+
+    # Retry target depends on which AI operation failed.
+    S.AI_OPERATION_FAILED: frozenset({
+        S.SESSION_PAUSED,
+        S.RECOVERY_REQUIRED,
+    }),
+
+    # A valid retry returns to memory retrieval.
+    S.MEMORY_RETRIEVAL_FAILED: frozenset({
+        S.MEMORY_RETRIEVAL_READY,
+        S.SESSION_PAUSED,
+    }),
+
+    # Recovery target is the last confirmed state / authorized operation.
+    S.RECOVERY_REQUIRED: frozenset(),
+}
+
+
+DYNAMIC_TRANSITION_STATES = frozenset({
+    S.SESSION_PAUSED,
+    S.AI_OPERATION_FAILED,
+    S.RECOVERY_REQUIRED,
+    S.VF_CONFIRMATION_REQUIRED,
+})
+
+
+def is_static_transition_allowed(source: S, target: S) -> bool:
+    return target in ALLOWED_TRANSITIONS[source]
+
+
+assert len(ALLOWED_TRANSITIONS) == 56
+assert set(ALLOWED_TRANSITIONS) == set(S)
+
+# Core HUMAN VECTOR protections.
+assert not is_static_transition_allowed(S.V1_GENERATED, S.CRITIC_RUNNING)
+assert is_static_transition_allowed(S.V1_GENERATED, S.HUMAN_RESPONSE_REQUIRED)
+
+assert not is_static_transition_allowed(
+    S.TRANSFER_PACKAGE_LOCKED,
+    S.RECONSTRUCTION_RUNNING,
+)
+
+assert not is_static_transition_allowed(
+    S.MEMORY_SELECTION_LOCKED,
+    S.RECONSTRUCTION_RUNNING,
+)
+
+assert not is_static_transition_allowed(
+    S.RECONSTRUCTION_PACKAGE_READY,
+    S.VF_DECLARED,
+)
