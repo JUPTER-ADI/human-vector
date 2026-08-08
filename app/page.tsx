@@ -1,13 +1,30 @@
 "use client";
 
-import { useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 
 type HealthStatus = "idle" | "loading" | "success" | "error";
+type SaveStatus = "idle" | "saving" | "success" | "error";
+type SessionsStatus = "loading" | "success" | "error";
 
 type HealthResponse = {
   ok: boolean;
   status: string;
   databaseTime?: string;
+};
+
+type HumanVectorSession = {
+  id: string;
+  objective: string;
+  aiAnalysis: string;
+  humanDecision: string;
+  createdAt: string;
+};
+
+type SessionsResponse = {
+  ok: boolean;
+  sessions?: HumanVectorSession[];
+  session?: HumanVectorSession;
+  status?: string;
 };
 
 const pillars = [
@@ -28,6 +45,10 @@ const pillars = [
   },
 ];
 
+function formatDate(value: string) {
+  return new Date(value).toLocaleString("ro-RO");
+}
+
 export default function Home() {
   const [healthStatus, setHealthStatus] =
     useState<HealthStatus>("idle");
@@ -35,6 +56,50 @@ export default function Home() {
   const [healthMessage, setHealthMessage] = useState(
     "Ready for live verification",
   );
+
+  const [objective, setObjective] = useState("");
+  const [aiAnalysis, setAiAnalysis] = useState("");
+  const [humanDecision, setHumanDecision] = useState("");
+
+  const [saveStatus, setSaveStatus] =
+    useState<SaveStatus>("idle");
+
+  const [saveMessage, setSaveMessage] = useState(
+    "Completează obiectivul pentru a crea o sesiune.",
+  );
+
+  const [sessionsStatus, setSessionsStatus] =
+    useState<SessionsStatus>("loading");
+
+  const [sessions, setSessions] = useState<
+    HumanVectorSession[]
+  >([]);
+
+  async function loadSessions() {
+    setSessionsStatus("loading");
+
+    try {
+      const response = await fetch("/api/sessions", {
+        cache: "no-store",
+      });
+
+      const data = (await response.json()) as SessionsResponse;
+
+      if (!response.ok || !data.ok || !data.sessions) {
+        throw new Error(data.status || "SESSIONS_READ_FAILED");
+      }
+
+      setSessions(data.sessions);
+      setSessionsStatus("success");
+    } catch (error) {
+      console.error("Loading sessions failed:", error);
+      setSessionsStatus("error");
+    }
+  }
+
+  useEffect(() => {
+    void loadSessions();
+  }, []);
 
   async function verifyDatabase() {
     setHealthStatus("loading");
@@ -56,7 +121,9 @@ export default function Home() {
         : "time confirmed";
 
       setHealthStatus("success");
-      setHealthMessage(`CockroachDB connected · ${databaseTime}`);
+      setHealthMessage(
+        `CockroachDB connected · ${databaseTime}`,
+      );
     } catch (error) {
       console.error("Health verification failed:", error);
       setHealthStatus("error");
@@ -64,14 +131,67 @@ export default function Home() {
     }
   }
 
-  const buttonLabel =
+  async function saveSession(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const cleanObjective = objective.trim();
+
+    if (!cleanObjective) {
+      setSaveStatus("error");
+      setSaveMessage("Obiectivul uman este obligatoriu.");
+      return;
+    }
+
+    setSaveStatus("saving");
+    setSaveMessage("Saving verified HUMAN VECTOR session...");
+
+    try {
+      const response = await fetch("/api/sessions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          objective: cleanObjective,
+          analysis: aiAnalysis.trim(),
+          decision: humanDecision.trim(),
+        }),
+      });
+
+      const data = (await response.json()) as SessionsResponse;
+
+      if (!response.ok || !data.ok || !data.session) {
+        throw new Error(data.status || "SESSION_SAVE_FAILED");
+      }
+
+      setSessions((currentSessions) => [
+        data.session as HumanVectorSession,
+        ...currentSessions,
+      ]);
+
+      setObjective("");
+      setAiAnalysis("");
+      setHumanDecision("");
+
+      setSaveStatus("success");
+      setSaveMessage(
+        "Sesiunea a fost salvată și verificată în CockroachDB.",
+      );
+    } catch (error) {
+      console.error("Saving session failed:", error);
+      setSaveStatus("error");
+      setSaveMessage("Salvarea a eșuat — verifică Terminalul.");
+    }
+  }
+
+  const healthButtonLabel =
     healthStatus === "loading"
       ? "Verifying..."
       : healthStatus === "success"
         ? "Verify Again"
         : healthStatus === "error"
           ? "Retry Verification"
-          : "Start Human Vector";
+          : "Verify CockroachDB";
 
   return (
     <main className="min-h-screen bg-[#07111f] text-white">
@@ -93,7 +213,7 @@ export default function Home() {
           </div>
         </header>
 
-        <section className="flex flex-1 flex-col justify-center py-16">
+        <section className="py-16">
           <p className="mb-5 text-sm font-medium tracking-[0.3em] text-cyan-300">
             DIRECTION BEFORE AUTOMATION
           </p>
@@ -139,7 +259,7 @@ export default function Home() {
               disabled={healthStatus === "loading"}
               className="rounded-xl bg-cyan-300 px-7 py-4 font-semibold text-[#07111f] transition hover:bg-cyan-200 disabled:cursor-wait disabled:opacity-60"
             >
-              {buttonLabel}
+              {healthButtonLabel}
             </button>
 
             <div
@@ -155,6 +275,188 @@ export default function Home() {
             >
               {healthMessage}
             </div>
+          </div>
+        </section>
+
+        <section className="border-t border-white/10 py-14">
+          <p className="text-sm font-medium tracking-[0.3em] text-cyan-300">
+            HUMAN VECTOR SESSION
+          </p>
+
+          <h2 className="mt-4 text-3xl font-semibold">
+            Human objective. AI analysis. Human decision.
+          </h2>
+
+          <form
+            onSubmit={saveSession}
+            className="mt-8 grid gap-6"
+          >
+            <label className="grid gap-2">
+              <span className="text-sm font-semibold text-slate-200">
+                1. Obiectivul stabilit de om
+              </span>
+
+              <textarea
+                value={objective}
+                onChange={(event) =>
+                  setObjective(event.target.value)
+                }
+                rows={3}
+                placeholder="Scrie obiectivul real al sesiunii..."
+                className="rounded-2xl border border-white/10 bg-white/[0.04] px-5 py-4 text-white outline-none transition placeholder:text-slate-600 focus:border-cyan-300/60"
+              />
+            </label>
+
+            <label className="grid gap-2">
+              <span className="text-sm font-semibold text-slate-200">
+                2. Analiza și variantele furnizate de AI
+              </span>
+
+              <textarea
+                value={aiAnalysis}
+                onChange={(event) =>
+                  setAiAnalysis(event.target.value)
+                }
+                rows={5}
+                placeholder="Scrie analiza, contrastul și variantele de acțiune..."
+                className="rounded-2xl border border-white/10 bg-white/[0.04] px-5 py-4 text-white outline-none transition placeholder:text-slate-600 focus:border-cyan-300/60"
+              />
+            </label>
+
+            <label className="grid gap-2">
+              <span className="text-sm font-semibold text-slate-200">
+                3. Decizia verificată și asumată de om
+              </span>
+
+              <textarea
+                value={humanDecision}
+                onChange={(event) =>
+                  setHumanDecision(event.target.value)
+                }
+                rows={4}
+                placeholder="Scrie decizia finală verificată de om..."
+                className="rounded-2xl border border-white/10 bg-white/[0.04] px-5 py-4 text-white outline-none transition placeholder:text-slate-600 focus:border-cyan-300/60"
+              />
+            </label>
+
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
+              <button
+                type="submit"
+                disabled={saveStatus === "saving"}
+                className="rounded-xl bg-cyan-300 px-7 py-4 font-semibold text-[#07111f] transition hover:bg-cyan-200 disabled:cursor-wait disabled:opacity-60"
+              >
+                {saveStatus === "saving"
+                  ? "Saving Session..."
+                  : "Save Verified Session"}
+              </button>
+
+              <div
+                className={`rounded-xl border px-5 py-4 text-sm ${
+                  saveStatus === "success"
+                    ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-300"
+                    : saveStatus === "error"
+                      ? "border-red-400/30 bg-red-400/10 text-red-300"
+                      : saveStatus === "saving"
+                        ? "border-cyan-300/30 bg-cyan-300/10 text-cyan-200"
+                        : "border-white/10 text-slate-400"
+                }`}
+              >
+                {saveMessage}
+              </div>
+            </div>
+          </form>
+        </section>
+
+        <section className="border-t border-white/10 py-14">
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm font-medium tracking-[0.3em] text-cyan-300">
+                VERIFIED MEMORY
+              </p>
+
+              <h2 className="mt-4 text-3xl font-semibold">
+                Saved HUMAN VECTOR sessions
+              </h2>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => void loadSessions()}
+              className="rounded-xl border border-white/10 px-5 py-3 text-sm text-slate-300 transition hover:border-cyan-300/40 hover:text-cyan-200"
+            >
+              Reload Sessions
+            </button>
+          </div>
+
+          <div className="mt-8 grid gap-5">
+            {sessionsStatus === "loading" && (
+              <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-6 text-slate-400">
+                Loading verified sessions...
+              </div>
+            )}
+
+            {sessionsStatus === "error" && (
+              <div className="rounded-2xl border border-red-400/30 bg-red-400/10 p-6 text-red-300">
+                Sessions could not be loaded.
+              </div>
+            )}
+
+            {sessionsStatus === "success" &&
+              sessions.length === 0 && (
+                <div className="rounded-2xl border border-white/10 bg-white/[0.04] p-6 text-slate-400">
+                  No session has been saved yet.
+                </div>
+              )}
+
+            {sessions.map((session) => (
+              <article
+                key={session.id}
+                className="rounded-2xl border border-white/10 bg-white/[0.04] p-6"
+              >
+                <div className="flex flex-col gap-2 border-b border-white/10 pb-4 sm:flex-row sm:items-center sm:justify-between">
+                  <p className="text-xs tracking-[0.2em] text-cyan-300">
+                    VERIFIED SESSION
+                  </p>
+
+                  <time className="text-xs text-slate-500">
+                    {formatDate(session.createdAt)}
+                  </time>
+                </div>
+
+                <div className="mt-5 grid gap-5">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                      Human objective
+                    </p>
+
+                    <p className="mt-2 leading-7 text-slate-200">
+                      {session.objective}
+                    </p>
+                  </div>
+
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                      AI analysis
+                    </p>
+
+                    <p className="mt-2 whitespace-pre-wrap leading-7 text-slate-400">
+                      {session.aiAnalysis || "No AI analysis recorded."}
+                    </p>
+                  </div>
+
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+                      Human decision
+                    </p>
+
+                    <p className="mt-2 whitespace-pre-wrap leading-7 text-emerald-300">
+                      {session.humanDecision ||
+                        "No human decision recorded."}
+                    </p>
+                  </div>
+                </div>
+              </article>
+            ))}
           </div>
         </section>
 
