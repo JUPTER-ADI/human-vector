@@ -7,6 +7,7 @@ from .transitions import (
     DYNAMIC_TRANSITION_STATES,
     is_static_transition_allowed,
 )
+from .recovery import resolve_recovery_target
 
 
 class Actor(str, Enum):
@@ -111,6 +112,56 @@ class SystemOrchestrator:
             return False
 
         return True
+
+    def recover(
+        self,
+        reason: str = "",
+    ) -> TransitionRecord:
+        if self.state is not S.RECOVERY_REQUIRED:
+            raise TransitionRejected(
+                f"Recovery requires {S.RECOVERY_REQUIRED.value}; "
+                f"current state is {self.state.value}"
+            )
+
+        if len(self.history) < 2:
+            raise TransitionRejected("Recovery context incomplete")
+
+        recovery_entry = self.history[-1]
+        failure_entry = self.history[-2]
+
+        if recovery_entry.target is not S.RECOVERY_REQUIRED:
+            raise TransitionRejected("Recovery history is inconsistent")
+
+        failure_state = recovery_entry.source
+
+        if failure_entry.target is not failure_state:
+            raise TransitionRejected("Failure provenance is inconsistent")
+
+        failed_from = failure_entry.source
+
+        try:
+            target = resolve_recovery_target(failure_state, failed_from)
+        except ValueError as exc:
+            raise TransitionRejected(str(exc)) from exc
+
+        self.revision += 1
+
+        record = TransitionRecord(
+            revision=self.revision,
+            source=self.state,
+            target=target,
+            actor=Actor.ORCHESTRATOR,
+            reason=reason or (
+                f"Authorized recovery from {failure_state.value}; "
+                f"failed from {failed_from.value}"
+            ),
+            occurred_at=datetime.now(timezone.utc).isoformat(),
+        )
+
+        self.state = target
+        self.history.append(record)
+
+        return record
 
     def transition(
         self,
