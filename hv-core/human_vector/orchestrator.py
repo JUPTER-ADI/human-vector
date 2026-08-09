@@ -1,0 +1,276 @@
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from enum import Enum
+
+from .states import HumanVectorState as S
+from .transitions import (
+    DYNAMIC_TRANSITION_STATES,
+    is_static_transition_allowed,
+)
+
+
+class Actor(str, Enum):
+    HUMAN = "HUMAN"
+    BUILDER_AI = "BUILDER_AI"
+    CRITIC_AI = "CRITIC_AI"
+    MEMORY = "MEMORY"
+    ORCHESTRATOR = "ORCHESTRATOR"
+    SYSTEM = "SYSTEM"
+
+
+class TransitionRejected(ValueError):
+    pass
+
+
+HUMAN_AUTHORITY_TRANSITIONS = frozenset({
+    (S.DIRECTION_CONFIRMATION_REQUIRED, S.DIRECTION_LOCKED),
+
+    (
+        S.HUMAN_RESPONSE_CONFIRMATION_REQUIRED,
+        S.HUMAN_RESPONSE_CAPTURED,
+    ),
+
+    (
+        S.HUMAN_CRITIC_SELECTION,
+        S.MANUAL_TRANSFER_PREPARATION,
+    ),
+
+    (
+        S.TRANSFER_CONFIRMATION_REQUIRED,
+        S.TRANSFER_PACKAGE_LOCKED,
+    ),
+
+    (
+        S.MEMORY_SELECTION_CONFIRMATION_REQUIRED,
+        S.MEMORY_SELECTION_LOCKED,
+    ),
+
+    (
+        S.RECONSTRUCTION_PACKAGE_CONFIRMATION_REQUIRED,
+        S.RECONSTRUCTION_PACKAGE_READY,
+    ),
+
+    (
+        S.HUMAN_VERIFICATION_REQUIRED,
+        S.VF_CONFIRMATION_REQUIRED,
+    ),
+
+    (
+        S.VF_CONFIRMATION_REQUIRED,
+        S.VF_HUMAN_DECLARATION,
+    ),
+
+    (
+        S.VF_HUMAN_DECLARATION,
+        S.VF_DECLARED,
+    ),
+})
+
+
+AGENT_OWNED_TRANSITIONS = {
+    (S.BUILDER_V1_RUNNING, S.V1_GENERATED): Actor.BUILDER_AI,
+    (S.CRITIC_RUNNING, S.CRITIC_REVIEW_GENERATED): Actor.CRITIC_AI,
+    (S.MEMORY_RETRIEVAL_RUNNING, S.MEMORY_REVIEW_REQUIRED): Actor.MEMORY,
+    (S.MEMORY_RETRIEVAL_RUNNING, S.NO_RELEVANT_MEMORY): Actor.MEMORY,
+    (S.RECONSTRUCTION_RUNNING, S.VN_GENERATED): Actor.BUILDER_AI,
+}
+
+
+@dataclass(frozen=True)
+class TransitionRecord:
+    revision: int
+    source: S
+    target: S
+    actor: Actor
+    reason: str
+    occurred_at: str
+
+
+@dataclass
+class SystemOrchestrator:
+    state: S = S.SESSION_CREATED
+    revision: int = 0
+    history: list[TransitionRecord] = field(default_factory=list)
+
+    def can_transition(
+        self,
+        target: S,
+        actor: Actor,
+    ) -> bool:
+        if not is_static_transition_allowed(self.state, target):
+            return False
+
+        if (
+            (self.state, target) in HUMAN_AUTHORITY_TRANSITIONS
+            and actor is not Actor.HUMAN
+        ):
+            return False
+
+        required_actor = AGENT_OWNED_TRANSITIONS.get((self.state, target))
+        if required_actor is not None and actor is not required_actor:
+            return False
+
+        return True
+
+    def transition(
+        self,
+        target: S,
+        actor: Actor,
+        reason: str = "",
+    ) -> TransitionRecord:
+        source = self.state
+
+        if not is_static_transition_allowed(source, target):
+            if source in DYNAMIC_TRANSITION_STATES:
+                raise TransitionRejected(
+                    f"Dynamic transition from {source.value} "
+                    f"to {target.value} requires explicit recovery context."
+                )
+
+            raise TransitionRejected(
+                f"Transition not allowed: "
+                f"{source.value} -> {target.value}"
+            )
+
+        if (
+            (source, target) in HUMAN_AUTHORITY_TRANSITIONS
+            and actor is not Actor.HUMAN
+        ):
+            raise TransitionRejected(
+                f"Human authority required: "
+                f"{source.value} -> {target.value}"
+            )
+
+        required_actor = AGENT_OWNED_TRANSITIONS.get((source, target))
+        if required_actor is not None and actor is not required_actor:
+            raise TransitionRejected(
+                f"Agent ownership required: "
+                f"{source.value} -> {target.value} requires "
+                f"{required_actor.value}"
+            )
+
+        self.revision += 1
+
+        record = TransitionRecord(
+            revision=self.revision,
+            source=source,
+            target=target,
+            actor=actor,
+            reason=reason,
+            occurred_at=datetime.now(timezone.utc).isoformat(),
+        )
+
+        self.state = target
+        self.history.append(record)
+
+        return record
+
+
+def _self_test() -> None:
+    orchestrator = SystemOrchestrator()
+
+    orchestrator.transition(
+        S.DIRECTION_DRAFT,
+        Actor.ORCHESTRATOR,
+    )
+    orchestrator.transition(
+        S.DIRECTION_VALIDATION_REQUIRED,
+        Actor.ORCHESTRATOR,
+    )
+    orchestrator.transition(
+        S.DIRECTION_CONFIRMATION_REQUIRED,
+        Actor.ORCHESTRATOR,
+    )
+
+    try:
+        orchestrator.transition(
+            S.DIRECTION_LOCKED,
+            Actor.ORCHESTRATOR,
+        )
+    except TransitionRejected:
+        pass
+    else:
+        raise AssertionError(
+            "Orchestrator incorrectly crossed a human authority gate."
+        )
+
+    orchestrator.transition(
+        S.DIRECTION_LOCKED,
+        Actor.HUMAN,
+        reason="Human confirmed and locked direction.",
+    )
+
+    orchestrator.transition(
+        S.BUILDER_V1_PACKAGE_PREPARATION,
+        Actor.ORCHESTRATOR,
+    )
+    orchestrator.transition(
+        S.BUILDER_V1_READY,
+        Actor.ORCHESTRATOR,
+    )
+    orchestrator.transition(
+        S.BUILDER_V1_RUNNING,
+        Actor.ORCHESTRATOR,
+    )
+    orchestrator.transition(
+        S.V1_GENERATED,
+        Actor.BUILDER_AI,
+    )
+
+    try:
+        orchestrator.transition(
+            S.CRITIC_RUNNING,
+            Actor.ORCHESTRATOR,
+        )
+    except TransitionRejected:
+        pass
+    else:
+        raise AssertionError(
+            "Critic was allowed before mandatory human response."
+        )
+
+    orchestrator.transition(
+        S.HUMAN_RESPONSE_REQUIRED,
+        Actor.ORCHESTRATOR,
+    )
+
+    assert orchestrator.revision == 9
+    assert len(orchestrator.history) == 9
+
+
+if __name__ == "__main__":
+    _self_test()
+
+
+AGENT_OWNED_TRANSITIONS = {
+    (S.BUILDER_V1_RUNNING, S.V1_GENERATED): Actor.BUILDER_AI,
+    (S.CRITIC_RUNNING, S.CRITIC_REVIEW_GENERATED): Actor.CRITIC_AI,
+    (S.MEMORY_RETRIEVAL_RUNNING, S.MEMORY_REVIEW_REQUIRED): Actor.MEMORY,
+    (S.MEMORY_RETRIEVAL_RUNNING, S.NO_RELEVANT_MEMORY): Actor.MEMORY,
+    (S.RECONSTRUCTION_RUNNING, S.VN_GENERATED): Actor.BUILDER_AI,
+}
+
+
+def _validate_agent_ownership() -> None:
+    for (source, target), required_actor in AGENT_OWNED_TRANSITIONS.items():
+        test = SystemOrchestrator(state=source)
+
+        wrong_actors = {
+            Actor.HUMAN,
+            Actor.BUILDER_AI,
+            Actor.CRITIC_AI,
+            Actor.MEMORY,
+            Actor.ORCHESTRATOR,
+            Actor.SYSTEM,
+        } - {required_actor}
+
+        for wrong_actor in wrong_actors:
+            if test.can_transition(target, wrong_actor):
+                raise AssertionError(
+                    f"{wrong_actor.value} incorrectly allowed for "
+                    f"{source.value} -> {target.value}"
+                )
+
+
+if __name__ == "__main__":
+    _validate_agent_ownership()
