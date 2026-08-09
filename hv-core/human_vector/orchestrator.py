@@ -113,6 +113,45 @@ class SystemOrchestrator:
 
         return True
 
+    def resume(
+        self,
+        reason: str = "",
+    ) -> TransitionRecord:
+        if self.state is not S.SESSION_PAUSED:
+            raise TransitionRejected(
+                f"Resume requires {S.SESSION_PAUSED.value}; "
+                f"current state is {self.state.value}"
+            )
+
+        if not self.history:
+            raise TransitionRejected("Pause context incomplete")
+
+        pause_entry = self.history[-1]
+
+        if pause_entry.target is not S.SESSION_PAUSED:
+            raise TransitionRejected("Pause history is inconsistent")
+
+        target = pause_entry.source
+
+        if target is S.SESSION_PAUSED:
+            raise TransitionRejected("Invalid nested pause context")
+
+        self.revision += 1
+
+        record = TransitionRecord(
+            revision=self.revision,
+            source=self.state,
+            target=target,
+            actor=Actor.ORCHESTRATOR,
+            reason=reason or f"Resume session to {target.value}",
+            occurred_at=datetime.now(timezone.utc).isoformat(),
+        )
+
+        self.state = target
+        self.history.append(record)
+
+        return record
+
     def recover(
         self,
         reason: str = "",
