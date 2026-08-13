@@ -94,3 +94,62 @@ def advance_direction_to_human_confirmation() -> dict:
         "human_confirmation_required": True,
         "final_authority": "HUMAN",
     }
+
+def advance_to_builder_v1_running() -> dict:
+    """Advance only orchestrator-owned Builder V1 setup steps and stop before Builder AI generates V1."""
+    allowed_states = {
+        S.DIRECTION_LOCKED,
+        S.BUILDER_V1_PACKAGE_PREPARATION,
+        S.BUILDER_V1_READY,
+    }
+
+    if _orchestrator.state not in allowed_states:
+        return {
+            "ok": False,
+            "state": _orchestrator.state.value,
+            "reason": (
+                "Builder V1 setup can only advance from DIRECTION_LOCKED, "
+                "BUILDER_V1_PACKAGE_PREPARATION, or BUILDER_V1_READY."
+            ),
+            "final_authority": "HUMAN",
+        }
+
+    try:
+        if _orchestrator.state == S.DIRECTION_LOCKED:
+            _orchestrator.transition(
+                S.BUILDER_V1_PACKAGE_PREPARATION,
+                Actor.ORCHESTRATOR,
+                "Prepare Builder V1 package",
+            )
+
+        if _orchestrator.state == S.BUILDER_V1_PACKAGE_PREPARATION:
+            _orchestrator.transition(
+                S.BUILDER_V1_READY,
+                Actor.ORCHESTRATOR,
+                "Builder V1 package ready",
+            )
+
+        if _orchestrator.state == S.BUILDER_V1_READY:
+            _orchestrator.transition(
+                S.BUILDER_V1_RUNNING,
+                Actor.ORCHESTRATOR,
+                "Start Builder V1 execution",
+            )
+
+    except TransitionRejected as exc:
+        return {
+            "ok": False,
+            "state": _orchestrator.state.value,
+            "reason": str(exc),
+            "final_authority": "HUMAN",
+        }
+
+    return {
+        "ok": True,
+        "state": _orchestrator.state.value,
+        "revision": _orchestrator.revision,
+        "history_length": len(_orchestrator.history),
+        "actor": _orchestrator.history[-1].actor.value,
+        "builder_ai_required": True,
+        "final_authority": "HUMAN",
+    }
