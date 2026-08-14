@@ -23,6 +23,18 @@ class TransitionRejected(ValueError):
     pass
 
 
+RETRIEVAL_CANDIDATES_FOUND = "CANDIDATES_FOUND"
+RETRIEVAL_NO_RELEVANT_CANDIDATE_FOUND = "NO_RELEVANT_CANDIDATE_FOUND"
+RETRIEVAL_TECHNICAL_ERROR = "TECHNICAL_ERROR"
+
+MEMORY_RESOLUTION_NO_RELEVANT_MEMORY = "NO_RELEVANT_MEMORY"
+
+NEGATIVE_REASON_NO_RELEVANT_CANDIDATE_FOUND = "NO_RELEVANT_CANDIDATE_FOUND"
+NEGATIVE_REASON_ZERO_ITEMS_AUTHORIZED_AFTER_HUMAN_REVIEW = (
+    "ZERO_ITEMS_AUTHORIZED_AFTER_HUMAN_REVIEW"
+)
+
+
 HUMAN_AUTHORITY_TRANSITIONS = frozenset({
     (S.DIRECTION_CONFIRMATION_REQUIRED, S.DIRECTION_LOCKED),
 
@@ -66,6 +78,26 @@ HUMAN_AUTHORITY_TRANSITIONS = frozenset({
     ),
 
     (
+        S.MEMORY_RETRIEVAL_RUNNING,
+        S.NO_RELEVANT_MEMORY,
+    ),
+    (
+        S.MEMORY_REVIEW_REQUIRED,
+        S.MEMORY_SELECTION_CONFIRMATION_REQUIRED,
+    ),
+    (
+        S.MEMORY_REVIEW_REQUIRED,
+        S.NO_RELEVANT_MEMORY,
+    ),
+    (
+        S.MEMORY_REVIEW_REQUIRED,
+        S.MEMORY_RETRIEVAL_READY,
+    ),
+    (
+        S.MEMORY_SELECTION_CONFIRMATION_REQUIRED,
+        S.MEMORY_REVIEW_REQUIRED,
+    ),
+    (
         S.MEMORY_SELECTION_CONFIRMATION_REQUIRED,
         S.MEMORY_SELECTION_LOCKED,
     ),
@@ -105,8 +137,11 @@ AGENT_OWNED_TRANSITIONS = {
     (S.CRITIC_CLARIFICATION_REQUIRED, S.CRITIC_RUNNING): Actor.ORCHESTRATOR,
     (S.TRANSFER_PACKAGE_LOCKED, S.MEMORY_RETRIEVAL_READY): Actor.ORCHESTRATOR,
     (S.CRITIC_RUNNING, S.CRITIC_REVIEW_GENERATED): Actor.CRITIC_AI,
+    (S.MEMORY_RETRIEVAL_READY, S.MEMORY_RETRIEVAL_RUNNING): Actor.ORCHESTRATOR,
     (S.MEMORY_RETRIEVAL_RUNNING, S.MEMORY_REVIEW_REQUIRED): Actor.MEMORY,
-    (S.MEMORY_RETRIEVAL_RUNNING, S.NO_RELEVANT_MEMORY): Actor.MEMORY,
+    (S.MEMORY_RETRIEVAL_RUNNING, S.MEMORY_RETRIEVAL_FAILED): Actor.MEMORY,
+    (S.MEMORY_SELECTION_LOCKED, S.RECONSTRUCTION_PACKAGE_PREPARATION): Actor.ORCHESTRATOR,
+    (S.NO_RELEVANT_MEMORY, S.RECONSTRUCTION_PACKAGE_PREPARATION): Actor.ORCHESTRATOR,
     (S.RECONSTRUCTION_RUNNING, S.VN_GENERATED): Actor.BUILDER_AI,
     (S.VN_GENERATED, S.VERSION_COMPARISON_READY): Actor.ORCHESTRATOR,
     (S.VERSION_COMPARISON_READY, S.VERSION_COMPARISON_GENERATED): Actor.ORCHESTRATOR,
@@ -129,6 +164,10 @@ class SystemOrchestrator:
     state: S = S.SESSION_CREATED
     revision: int = 0
     history: list[TransitionRecord] = field(default_factory=list)
+    retrieval_outcome: str | None = None
+    outcome_reason: str = ""
+    memory_resolution_outcome: str | None = None
+    negative_result_reason: str = ""
 
     def can_transition(
         self,
@@ -148,7 +187,88 @@ class SystemOrchestrator:
         if required_actor is not None and actor is not required_actor:
             return False
 
+        if self.state is S.MEMORY_RETRIEVAL_RUNNING:
+            if (
+                target is S.MEMORY_REVIEW_REQUIRED
+                and self.retrieval_outcome != RETRIEVAL_CANDIDATES_FOUND
+            ):
+                return False
+
+            if (
+                target is S.NO_RELEVANT_MEMORY
+                and self.retrieval_outcome
+                != RETRIEVAL_NO_RELEVANT_CANDIDATE_FOUND
+            ):
+                return False
+
+            if (
+                target is S.MEMORY_RETRIEVAL_FAILED
+                and self.retrieval_outcome != RETRIEVAL_TECHNICAL_ERROR
+            ):
+                return False
+
+        if (
+            self.state is S.MEMORY_REVIEW_REQUIRED
+            and target is S.NO_RELEVANT_MEMORY
+            and self.retrieval_outcome != RETRIEVAL_CANDIDATES_FOUND
+        ):
+            return False
+
         return True
+
+    def record_memory_retrieval_outcome(
+        self,
+        outcome: str,
+        actor: Actor,
+        reason: str = "",
+    ) -> None:
+        if self.state is not S.MEMORY_RETRIEVAL_RUNNING:
+            raise TransitionRejected(
+                "Memory retrieval outcome can only be recorded while "
+                f"{S.MEMORY_RETRIEVAL_RUNNING.value} is active."
+            )
+
+        if actor is not Actor.MEMORY:
+            raise TransitionRejected(
+                "Memory retrieval outcome requires MEMORY actor."
+            )
+
+        allowed_outcomes = {
+            RETRIEVAL_CANDIDATES_FOUND,
+            RETRIEVAL_NO_RELEVANT_CANDIDATE_FOUND,
+            RETRIEVAL_TECHNICAL_ERROR,
+        }
+
+        if outcome not in allowed_outcomes:
+            raise TransitionRejected(
+                f"Invalid memory retrieval outcome: {outcome}"
+            )
+
+        if (
+            outcome
+            in {
+                RETRIEVAL_NO_RELEVANT_CANDIDATE_FOUND,
+                RETRIEVAL_TECHNICAL_ERROR,
+            }
+            and not reason.strip()
+        ):
+            raise TransitionRejected(
+                f"{outcome} requires a preserved outcome_reason."
+            )
+
+        if self.retrieval_outcome is not None:
+            if (
+                self.retrieval_outcome == outcome
+                and self.outcome_reason == reason
+            ):
+                return
+
+            raise TransitionRejected(
+                "Memory retrieval outcome is already recorded for this run."
+            )
+
+        self.retrieval_outcome = outcome
+        self.outcome_reason = reason
 
     def resume(
         self,
@@ -274,6 +394,76 @@ class SystemOrchestrator:
                 f"Agent ownership required: "
                 f"{source.value} -> {target.value} requires "
                 f"{required_actor.value}"
+            )
+
+        if source is S.MEMORY_RETRIEVAL_RUNNING:
+            if (
+                target is S.MEMORY_REVIEW_REQUIRED
+                and self.retrieval_outcome != RETRIEVAL_CANDIDATES_FOUND
+            ):
+                raise TransitionRejected(
+                    "MEMORY_REVIEW_REQUIRED requires "
+                    "retrieval_outcome=CANDIDATES_FOUND."
+                )
+
+            if (
+                target is S.NO_RELEVANT_MEMORY
+                and self.retrieval_outcome
+                != RETRIEVAL_NO_RELEVANT_CANDIDATE_FOUND
+            ):
+                raise TransitionRejected(
+                    "NO_RELEVANT_MEMORY from retrieval requires "
+                    "retrieval_outcome=NO_RELEVANT_CANDIDATE_FOUND."
+                )
+
+            if (
+                target is S.MEMORY_RETRIEVAL_FAILED
+                and self.retrieval_outcome != RETRIEVAL_TECHNICAL_ERROR
+            ):
+                raise TransitionRejected(
+                    "MEMORY_RETRIEVAL_FAILED requires "
+                    "retrieval_outcome=TECHNICAL_ERROR."
+                )
+
+        if (
+            source is S.MEMORY_REVIEW_REQUIRED
+            and target is S.NO_RELEVANT_MEMORY
+            and self.retrieval_outcome != RETRIEVAL_CANDIDATES_FOUND
+        ):
+            raise TransitionRejected(
+                "NO_RELEVANT_MEMORY after human review requires a prior "
+                "retrieval_outcome=CANDIDATES_FOUND."
+            )
+
+        if (
+            source is S.MEMORY_RETRIEVAL_READY
+            and target is S.MEMORY_RETRIEVAL_RUNNING
+        ):
+            self.retrieval_outcome = None
+            self.outcome_reason = ""
+            self.memory_resolution_outcome = None
+            self.negative_result_reason = ""
+
+        if (
+            source is S.MEMORY_RETRIEVAL_RUNNING
+            and target is S.NO_RELEVANT_MEMORY
+        ):
+            self.memory_resolution_outcome = (
+                MEMORY_RESOLUTION_NO_RELEVANT_MEMORY
+            )
+            self.negative_result_reason = (
+                NEGATIVE_REASON_NO_RELEVANT_CANDIDATE_FOUND
+            )
+
+        if (
+            source is S.MEMORY_REVIEW_REQUIRED
+            and target is S.NO_RELEVANT_MEMORY
+        ):
+            self.memory_resolution_outcome = (
+                MEMORY_RESOLUTION_NO_RELEVANT_MEMORY
+            )
+            self.negative_result_reason = (
+                NEGATIVE_REASON_ZERO_ITEMS_AUTHORIZED_AFTER_HUMAN_REVIEW
             )
 
         self.revision += 1
