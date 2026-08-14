@@ -121,17 +121,7 @@ HUMAN_AUTHORITY_TRANSITIONS = frozenset({
 
     (
         S.HUMAN_VERIFICATION_REQUIRED,
-        S.VF_CONFIRMATION_REQUIRED,
-    ),
-
-    (
-        S.VF_CONFIRMATION_REQUIRED,
-        S.VF_HUMAN_DECLARATION,
-    ),
-
-    (
-        S.VF_HUMAN_DECLARATION,
-        S.VF_DECLARED,
+        S.VF_PRECHECK_REQUIRED,
     ),
 })
 
@@ -160,7 +150,130 @@ AGENT_OWNED_TRANSITIONS = {
     (S.VN_GENERATED, S.VERSION_COMPARISON_READY): Actor.ORCHESTRATOR,
     (S.VERSION_COMPARISON_READY, S.VERSION_COMPARISON_GENERATED): Actor.ORCHESTRATOR,
     (S.VERSION_COMPARISON_GENERATED, S.HUMAN_VERIFICATION_REQUIRED): Actor.ORCHESTRATOR,
+    (S.VF_PRECHECK_REQUIRED, S.DIRECTION_DRAFT): Actor.SYSTEM,
+    (S.VF_PRECHECK_REQUIRED, S.DIRECTION_VALIDATION_REQUIRED): Actor.SYSTEM,
+    (S.VF_PRECHECK_REQUIRED, S.DIRECTION_CONFIRMATION_REQUIRED): Actor.SYSTEM,
+    (S.VF_PRECHECK_REQUIRED, S.BUILDER_V1_PACKAGE_PREPARATION): Actor.SYSTEM,
+    (S.VF_PRECHECK_REQUIRED, S.RECOVERY_REQUIRED): Actor.SYSTEM,
+    (S.VF_PRECHECK_REQUIRED, S.HUMAN_RESPONSE_REQUIRED): Actor.SYSTEM,
+    (S.VF_PRECHECK_REQUIRED, S.CRITIC_PACKAGE_PREPARATION): Actor.SYSTEM,
+    (S.VF_PRECHECK_REQUIRED, S.CONFLICT_SPACE_READY): Actor.SYSTEM,
+    (S.VF_PRECHECK_REQUIRED, S.HUMAN_CRITIC_SELECTION): Actor.SYSTEM,
+    (S.VF_PRECHECK_REQUIRED, S.MANUAL_TRANSFER_PREPARATION): Actor.SYSTEM,
+    (S.VF_PRECHECK_REQUIRED, S.MEMORY_RETRIEVAL_READY): Actor.SYSTEM,
+    (S.VF_PRECHECK_REQUIRED, S.MEMORY_REVIEW_REQUIRED): Actor.SYSTEM,
+    (S.VF_PRECHECK_REQUIRED, S.MEMORY_SELECTION_CONFIRMATION_REQUIRED): Actor.SYSTEM,
+    (S.VF_PRECHECK_REQUIRED, S.NO_RELEVANT_MEMORY): Actor.SYSTEM,
+    (S.VF_PRECHECK_REQUIRED, S.RECONSTRUCTION_PACKAGE_PREPARATION): Actor.SYSTEM,
+    (S.VF_PRECHECK_REQUIRED, S.RECONSTRUCTION_PACKAGE_CONFIRMATION_REQUIRED): Actor.SYSTEM,
+    (S.VF_PRECHECK_REQUIRED, S.RECONSTRUCTION_RUNNING): Actor.SYSTEM,
+    (S.VF_PRECHECK_REQUIRED, S.VERSION_COMPARISON_READY): Actor.SYSTEM,
+    (S.VF_PRECHECK_REQUIRED, S.HUMAN_VERIFICATION_REQUIRED): Actor.SYSTEM,
+    (S.VF_PRECHECK_REQUIRED, S.VF_HUMAN_DECLARATION): Actor.SYSTEM,
+    (S.VF_HUMAN_DECLARATION, S.VF_DECLARED): Actor.SYSTEM,
+    (S.VF_DECLARED, S.VF_LOCKING_IN_PROGRESS): Actor.SYSTEM,
+    (S.VF_LOCKING_IN_PROGRESS, S.VF_LOCKED): Actor.SYSTEM,
+    (S.VF_LOCKED, S.FINAL_REPORT_GENERATION): Actor.SYSTEM,
+    (S.FINAL_REPORT_GENERATION, S.FINAL_REPORT_READY): Actor.SYSTEM,
+    (S.FINAL_REPORT_READY, S.SESSION_ARCHIVED): Actor.SYSTEM,
 }
+
+
+SESSION_MODE_FULL_PROTOCOL = "FULL_PROTOCOL"
+SESSION_MODE_DEMO_PROTOCOL = "DEMO_PROTOCOL"
+SESSION_MODE_TECHNICAL_TEST = "TECHNICAL_TEST"
+SESSION_MODE_RESEARCH_MODE = "RESEARCH_MODE"
+
+VALID_SESSION_MODES = frozenset({
+    SESSION_MODE_FULL_PROTOCOL,
+    SESSION_MODE_DEMO_PROTOCOL,
+    SESSION_MODE_TECHNICAL_TEST,
+    SESSION_MODE_RESEARCH_MODE,
+})
+
+VF_PRECHECK_OK = "VF_PRECHECK_OK"
+MODE_NOT_ELIGIBLE_FOR_VF = "MODE_NOT_ELIGIBLE_FOR_VF"
+
+VF_PRECHECK_TARGET_BY_CODE = {
+    "VF_PRECHECK_DIRECTION_MISSING": S.DIRECTION_DRAFT,
+    "VF_PRECHECK_DIRECTION_VALIDATION_MISSING_OR_INVALID": S.DIRECTION_VALIDATION_REQUIRED,
+    "VF_PRECHECK_DIRECTION_UNCONFIRMED": S.DIRECTION_CONFIRMATION_REQUIRED,
+    "VF_PRECHECK_V1_MISSING": S.BUILDER_V1_PACKAGE_PREPARATION,
+    "VF_PRECHECK_V1_INTEGRITY_INVALID": S.RECOVERY_REQUIRED,
+    "VF_PRECHECK_HUMAN_RESPONSE_MISSING": S.HUMAN_RESPONSE_REQUIRED,
+    "VF_PRECHECK_HUMAN_CONTRADICTION_OR_IDEA_MISSING": S.HUMAN_RESPONSE_REQUIRED,
+    "VF_PRECHECK_CRITIC_MISSING": S.CRITIC_PACKAGE_PREPARATION,
+    "VF_PRECHECK_CRITIC_INTEGRITY_INVALID": S.RECOVERY_REQUIRED,
+    "VF_PRECHECK_CONFLICT_SPACE_MISSING": S.CONFLICT_SPACE_READY,
+    "VF_PRECHECK_CONFLICT_SPACE_INTEGRITY_INVALID": S.RECOVERY_REQUIRED,
+    "VF_PRECHECK_SELECTION_MISSING": S.HUMAN_CRITIC_SELECTION,
+    "VF_PRECHECK_TRANSFER_MISSING": S.MANUAL_TRANSFER_PREPARATION,
+    "VF_PRECHECK_TRANSFER_LOCK_OR_INTEGRITY_INVALID": S.RECOVERY_REQUIRED,
+    "VF_PRECHECK_MEMORY_RETRIEVAL_NOT_EXECUTED": S.MEMORY_RETRIEVAL_READY,
+    "VF_PRECHECK_MEMORY_REVIEW_PENDING": S.MEMORY_REVIEW_REQUIRED,
+    "VF_PRECHECK_MEMORY_SELECTION_CONFIRMATION_MISSING": S.MEMORY_SELECTION_CONFIRMATION_REQUIRED,
+    "VF_PRECHECK_MEMORY_TRANSFER_OR_LOCK_FAILED": S.RECOVERY_REQUIRED,
+    "VF_PRECHECK_NO_RELEVANT_MEMORY_UNCONFIRMED": S.NO_RELEVANT_MEMORY,
+    "VF_PRECHECK_RECONSTRUCTION_PACKAGE_MISSING": S.RECONSTRUCTION_PACKAGE_PREPARATION,
+    "VF_PRECHECK_RECONSTRUCTION_PACKAGE_UNCONFIRMED": S.RECONSTRUCTION_PACKAGE_CONFIRMATION_REQUIRED,
+    "VF_PRECHECK_RECONSTRUCTION_PACKAGE_LOCK_OR_INTEGRITY_INVALID": S.RECOVERY_REQUIRED,
+    "VF_PRECHECK_RECONSTRUCTION_MISSING_WITH_READY_PACKAGE": S.RECONSTRUCTION_RUNNING,
+    "VF_PRECHECK_COMPARISON_MISSING": S.VERSION_COMPARISON_READY,
+    "VF_PRECHECK_PROVENANCE_OR_INTEGRITY_INVALID": S.RECOVERY_REQUIRED,
+    "VF_PRECHECK_HUMAN_VERIFICATION_MISSING_OR_EVIDENCE_INSUFFICIENT": S.HUMAN_VERIFICATION_REQUIRED,
+    VF_PRECHECK_OK: S.VF_HUMAN_DECLARATION,
+}
+
+
+@dataclass(frozen=True)
+class ResultVersion:
+    version_id: str
+    session_id: str
+    version_label: str
+    content: str
+    content_hash: str
+    status: str
+    created_revision: int
+
+
+@dataclass(frozen=True)
+class VFFinalIntegrityResult:
+    declaration_persisted: bool
+    actor_persisted: bool
+    moment_persisted: bool
+    provenance_persisted: bool
+    selected_version_bound: bool
+    no_unresolved_technical_error: bool
+    reason: str
+    checked_revision: int
+
+
+@dataclass(frozen=True)
+class VFHumanDeclaration:
+    selected_version: str
+    selected_version_id: str
+    selected_version_content_hash: str
+    choice_reason: str
+    relation_to_initial_direction: str
+    decisive_human_contribution: str
+    integrated_builder_elements: str
+    decisive_critics: str
+    rejected_critics: str
+    memory_basis: str
+    verifications_performed: str
+    remaining_risks_and_uncertainties: str
+    preserved_contradictions: str
+    intended_use: str
+    decision_assumption: str
+    declared_revision: int
+
+
+@dataclass(frozen=True)
+class MemoryEffectVerification:
+    memory_selection_item_id: str
+    outcome: str
+    reason: str
+    verified_revision: int
 
 
 @dataclass(frozen=True)
@@ -178,10 +291,125 @@ class SystemOrchestrator:
     state: S = S.SESSION_CREATED
     revision: int = 0
     history: list[TransitionRecord] = field(default_factory=list)
+    session_id: str | None = None
+    result_versions: dict[str, ResultVersion] = field(default_factory=dict)
+    vf_locked_version_id: str | None = None
+    vf_locked_content_hash: str | None = None
     retrieval_outcome: str | None = None
     outcome_reason: str = ""
     memory_resolution_outcome: str | None = None
     negative_result_reason: str = ""
+    session_mode: str | None = None
+    vf_precheck_code: str | None = None
+    vf_precheck_condition: str = ""
+    vf_precheck_target: S | None = None
+    vf_precheck_reason: str = ""
+    vf_precheck_revision: int | None = None
+    memory_effect_verifications: list[MemoryEffectVerification] = field(
+        default_factory=list
+    )
+    vf_human_declaration: VFHumanDeclaration | None = None
+    vf_human_declaration_revision: int | None = None
+    vf_final_integrity_result: VFFinalIntegrityResult | None = None
+    vf_final_integrity_revision: int | None = None
+
+    def _vf_final_integrity_allows_locking(
+        self,
+        source: S,
+        target: S,
+    ) -> bool:
+        if not (
+            source is S.VF_DECLARED
+            and target is S.VF_LOCKING_IN_PROGRESS
+        ):
+            return True
+
+        result = self.vf_final_integrity_result
+
+        return (
+            result is not None
+            and self.vf_final_integrity_revision == self.revision
+            and result.checked_revision == self.revision
+            and result.declaration_persisted
+            and result.actor_persisted
+            and result.moment_persisted
+            and result.provenance_persisted
+            and result.selected_version_bound
+            and result.no_unresolved_technical_error
+        )
+
+    def _vf_selected_result_allows_locked(
+        self,
+        source: S,
+        target: S,
+    ) -> bool:
+        if not (
+            source is S.VF_LOCKING_IN_PROGRESS
+            and target is S.VF_LOCKED
+        ):
+            return True
+
+        declaration = self.vf_human_declaration
+
+        if declaration is None or self.session_id is None:
+            return False
+
+        selected = self.result_versions.get(
+            declaration.selected_version_id
+        )
+
+        if selected is None:
+            return False
+
+        from hashlib import sha256
+
+        actual_content_hash = sha256(
+            selected.content.encode("utf-8")
+        ).hexdigest()
+
+        return (
+            selected.session_id == self.session_id
+            and selected.version_id
+            == declaration.selected_version_id
+            and selected.version_label
+            == declaration.selected_version
+            and selected.content_hash
+            == declaration.selected_version_content_hash
+            and actual_content_hash
+            == selected.content_hash
+        )
+
+
+    def _vf_human_declaration_allows_declared(
+        self,
+        source: S,
+        target: S,
+    ) -> bool:
+        if not (
+            source is S.VF_HUMAN_DECLARATION
+            and target is S.VF_DECLARED
+        ):
+            return True
+
+        return (
+            self.vf_human_declaration is not None
+            and self.vf_human_declaration_revision == self.revision
+            and self.vf_human_declaration.declared_revision == self.revision
+        )
+
+    def _vf_precheck_transition_allowed(
+        self,
+        source: S,
+        target: S,
+    ) -> bool:
+        if source is not S.VF_PRECHECK_REQUIRED:
+            return True
+
+        return (
+            self.vf_precheck_revision == self.revision
+            and self.vf_precheck_target is not None
+            and target is self.vf_precheck_target
+        )
 
     def can_transition(
         self,
@@ -228,7 +456,411 @@ class SystemOrchestrator:
         ):
             return False
 
+        if not self._vf_final_integrity_allows_locking(
+            self.state,
+            target,
+        ):
+            return False
+
+        if not self._vf_selected_result_allows_locked(
+            self.state,
+            target,
+        ):
+            return False
+
+        if not self._vf_human_declaration_allows_declared(
+            self.state,
+            target,
+        ):
+            return False
+
+        if not self._vf_precheck_transition_allowed(
+            self.state,
+            target,
+        ):
+            return False
+
         return True
+
+    def record_result_version(
+        self,
+        *,
+        session_id: str,
+        version_label: str,
+        content: str,
+        actor: Actor,
+    ) -> ResultVersion:
+        from hashlib import sha256
+        from uuid import UUID, uuid4
+
+        if self.state not in {S.V1_GENERATED, S.VN_GENERATED}:
+            raise TransitionRejected(
+                "Result version can only be recorded after Builder generation."
+            )
+
+        if actor is not Actor.BUILDER_AI:
+            raise TransitionRejected(
+                "Result version requires BUILDER_AI actor."
+            )
+
+        try:
+            normalized_session_id = str(UUID(session_id.strip()))
+        except (ValueError, AttributeError):
+            raise TransitionRejected(
+                "Result version requires a valid session UUID."
+            )
+
+        label = version_label.strip()
+        if not label:
+            raise TransitionRejected(
+                "Result version requires a version label."
+            )
+
+        if not content.strip():
+            raise TransitionRejected(
+                "Result version requires non-empty content."
+            )
+
+        if self.session_id is None:
+            self.session_id = normalized_session_id
+        elif self.session_id != normalized_session_id:
+            raise TransitionRejected(
+                "Result version session UUID does not match orchestrator session."
+            )
+
+        if any(
+            version.version_label == label
+            for version in self.result_versions.values()
+        ):
+            raise TransitionRejected(
+                "Result version label already exists in this session."
+            )
+
+        version_id = str(uuid4())
+        content_hash = sha256(content.encode("utf-8")).hexdigest()
+
+        result = ResultVersion(
+            version_id=version_id,
+            session_id=normalized_session_id,
+            version_label=label,
+            content=content,
+            content_hash=content_hash,
+            status="VERSION_GENERATED",
+            created_revision=self.revision,
+        )
+
+        self.result_versions[version_id] = result
+        return result
+
+    def record_vf_final_integrity_result(
+        self,
+        *,
+        declaration_persisted: bool,
+        actor_persisted: bool,
+        moment_persisted: bool,
+        provenance_persisted: bool,
+        selected_version_bound: bool,
+        no_unresolved_technical_error: bool,
+        reason: str,
+        actor: Actor,
+    ) -> None:
+        if self.state is not S.VF_DECLARED:
+            raise TransitionRejected(
+                "VF final integrity check requires VF_DECLARED."
+            )
+
+        if actor is not Actor.SYSTEM:
+            raise TransitionRejected(
+                "VF final integrity check requires SYSTEM actor."
+            )
+
+        if self.vf_final_integrity_revision == self.revision:
+            raise TransitionRejected(
+                "VF final integrity result is already recorded for this revision."
+            )
+
+        if not reason.strip():
+            raise TransitionRejected(
+                "VF final integrity result requires a reason."
+            )
+
+        self.vf_final_integrity_result = VFFinalIntegrityResult(
+            declaration_persisted=declaration_persisted,
+            actor_persisted=actor_persisted,
+            moment_persisted=moment_persisted,
+            provenance_persisted=provenance_persisted,
+            selected_version_bound=selected_version_bound,
+            no_unresolved_technical_error=no_unresolved_technical_error,
+            reason=reason.strip(),
+            checked_revision=self.revision,
+        )
+        self.vf_final_integrity_revision = self.revision
+
+    def record_vf_human_declaration(
+        self,
+        *,
+        selected_version: str,
+        choice_reason: str,
+        relation_to_initial_direction: str,
+        decisive_human_contribution: str,
+        integrated_builder_elements: str,
+        decisive_critics: str,
+        rejected_critics: str,
+        memory_basis: str,
+        verifications_performed: str,
+        remaining_risks_and_uncertainties: str,
+        preserved_contradictions: str,
+        intended_use: str,
+        decision_assumption: str,
+        actor: Actor,
+    ) -> None:
+        if self.state is not S.VF_HUMAN_DECLARATION:
+            raise TransitionRejected(
+                "VF human declaration requires VF_HUMAN_DECLARATION."
+            )
+
+        if actor is not Actor.HUMAN:
+            raise TransitionRejected(
+                "VF human declaration requires HUMAN actor."
+            )
+
+        if self.vf_human_declaration_revision == self.revision:
+            raise TransitionRejected(
+                "VF human declaration is already recorded for this revision."
+            )
+
+        values = {
+            "selected_version": selected_version,
+            "choice_reason": choice_reason,
+            "relation_to_initial_direction": relation_to_initial_direction,
+            "decisive_human_contribution": decisive_human_contribution,
+            "integrated_builder_elements": integrated_builder_elements,
+            "decisive_critics": decisive_critics,
+            "rejected_critics": rejected_critics,
+            "memory_basis": memory_basis,
+            "verifications_performed": verifications_performed,
+            "remaining_risks_and_uncertainties": remaining_risks_and_uncertainties,
+            "preserved_contradictions": preserved_contradictions,
+            "intended_use": intended_use,
+            "decision_assumption": decision_assumption,
+        }
+
+        missing = [
+            name
+            for name, value in values.items()
+            if not isinstance(value, str) or not value.strip()
+        ]
+
+        if missing:
+            raise TransitionRejected(
+                "VF human declaration missing required fields: "
+                + ", ".join(sorted(missing))
+            )
+
+        selected_version_label = selected_version.strip()
+
+        matching_versions = [
+            version
+            for version in self.result_versions.values()
+            if version.version_label == selected_version_label
+        ]
+
+        if len(matching_versions) != 1:
+            raise TransitionRejected(
+                "VF selected_version must resolve to exactly one recorded "
+                "ResultVersion."
+            )
+
+        selected_result_version = matching_versions[0]
+
+        if (
+            self.session_id is None
+            or selected_result_version.session_id != self.session_id
+        ):
+            raise TransitionRejected(
+                "VF selected_version must belong to the orchestrator session."
+            )
+
+        self.vf_human_declaration = VFHumanDeclaration(
+            selected_version=selected_version_label,
+            selected_version_id=selected_result_version.version_id,
+            selected_version_content_hash=selected_result_version.content_hash,
+            choice_reason=choice_reason.strip(),
+            relation_to_initial_direction=relation_to_initial_direction.strip(),
+            decisive_human_contribution=decisive_human_contribution.strip(),
+            integrated_builder_elements=integrated_builder_elements.strip(),
+            decisive_critics=decisive_critics.strip(),
+            rejected_critics=rejected_critics.strip(),
+            memory_basis=memory_basis.strip(),
+            verifications_performed=verifications_performed.strip(),
+            remaining_risks_and_uncertainties=remaining_risks_and_uncertainties.strip(),
+            preserved_contradictions=preserved_contradictions.strip(),
+            intended_use=intended_use.strip(),
+            decision_assumption=decision_assumption.strip(),
+            declared_revision=self.revision,
+        )
+        self.vf_human_declaration_revision = self.revision
+
+    def record_vf_precheck_result(
+        self,
+        *,
+        code: str,
+        actor: Actor,
+        condition: str = "",
+        reason: str = "",
+    ) -> None:
+        if self.state is not S.VF_PRECHECK_REQUIRED:
+            raise TransitionRejected(
+                "VF precheck result requires VF_PRECHECK_REQUIRED."
+            )
+
+        if actor is not Actor.SYSTEM:
+            raise TransitionRejected(
+                "VF precheck result requires SYSTEM actor."
+            )
+
+        if self.session_mode not in VALID_SESSION_MODES:
+            raise TransitionRejected(
+                "VF precheck requires an explicit valid session_mode."
+            )
+
+        if self.session_mode == SESSION_MODE_TECHNICAL_TEST:
+            if code != MODE_NOT_ELIGIBLE_FOR_VF:
+                raise TransitionRejected(
+                    "TECHNICAL_TEST requires MODE_NOT_ELIGIBLE_FOR_VF."
+                )
+            if not condition.strip() or not reason.strip():
+                raise TransitionRejected(
+                    "MODE_NOT_ELIGIBLE_FOR_VF requires condition and reason."
+                )
+
+            self.vf_precheck_code = code
+            self.vf_precheck_condition = condition.strip()
+            self.vf_precheck_target = None
+            self.vf_precheck_reason = reason.strip()
+            self.vf_precheck_revision = self.revision
+            return
+
+        if code == MODE_NOT_ELIGIBLE_FOR_VF:
+            raise TransitionRejected(
+                "MODE_NOT_ELIGIBLE_FOR_VF is reserved for TECHNICAL_TEST."
+            )
+
+        target = VF_PRECHECK_TARGET_BY_CODE.get(code)
+        if target is None:
+            raise TransitionRejected(
+                f"Unknown VF precheck code: {code}"
+            )
+
+        if (
+            code == VF_PRECHECK_OK
+            and self.session_mode == SESSION_MODE_DEMO_PROTOCOL
+            and not self._has_demo_positive_memory_evidence()
+        ):
+            raise TransitionRejected(
+                "DEMO_PROTOCOL requires positive memory evidence "
+                "before VF_PRECHECK_OK."
+            )
+
+        if code != VF_PRECHECK_OK:
+            if not condition.strip() or not reason.strip():
+                raise TransitionRejected(
+                    "Failed VF precheck requires condition and reason."
+                )
+
+        self.vf_precheck_code = code
+        self.vf_precheck_condition = (
+            condition.strip()
+            if condition.strip()
+            else "ALL_CANONICAL_CONDITIONS_SATISFIED"
+        )
+        self.vf_precheck_target = target
+        self.vf_precheck_reason = reason.strip()
+        self.vf_precheck_revision = self.revision
+
+    def _has_demo_positive_memory_evidence(self) -> bool:
+        if self.retrieval_outcome != RETRIEVAL_CANDIDATES_FOUND:
+            return False
+
+        locked_index = None
+        vn_index = None
+
+        for index, record in enumerate(self.history):
+            if (
+                locked_index is None
+                and record.target is S.MEMORY_SELECTION_LOCKED
+            ):
+                locked_index = index
+
+            if (
+                locked_index is not None
+                and index > locked_index
+                and record.target is S.VN_GENERATED
+            ):
+                vn_index = index
+                break
+
+        if locked_index is None or vn_index is None:
+            return False
+
+        return any(
+            evidence.outcome == "OBSERVABLE_EFFECT"
+            for evidence in self.memory_effect_verifications
+        )
+
+    def record_memory_effect_verification(
+        self,
+        *,
+        memory_selection_item_id: str,
+        outcome: str,
+        actor: Actor,
+        reason: str,
+    ) -> None:
+        if actor is not Actor.HUMAN:
+            raise TransitionRejected(
+                "Memory effect verification requires HUMAN actor."
+            )
+
+        allowed_outcomes = {
+            "OBSERVABLE_EFFECT",
+            "DISTORTION",
+            "NOT_INTEGRATED",
+            "COMPARISON_ONLY",
+        }
+
+        normalized = outcome.strip().upper()
+        if normalized not in allowed_outcomes:
+            raise TransitionRejected(
+                "Invalid memory effect verification outcome."
+            )
+
+        if not memory_selection_item_id.strip():
+            raise TransitionRejected(
+                "memory_selection_item_id is required."
+            )
+
+        if not reason.strip():
+            raise TransitionRejected(
+                "Memory effect verification requires a reason."
+            )
+
+        vn_exists = any(
+            record.target is S.VN_GENERATED
+            for record in self.history
+        )
+        if not vn_exists:
+            raise TransitionRejected(
+                "Memory effect cannot be verified before VN_GENERATED."
+            )
+
+        self.memory_effect_verifications.append(
+            MemoryEffectVerification(
+                memory_selection_item_id=memory_selection_item_id.strip(),
+                outcome=normalized,
+                reason=reason.strip(),
+                verified_revision=self.revision,
+            )
+        )
 
     def record_memory_retrieval_outcome(
         self,
@@ -410,6 +1042,42 @@ class SystemOrchestrator:
                 f"{required_actor.value}"
             )
 
+        if not self._vf_precheck_transition_allowed(
+            source,
+            target,
+        ):
+            raise TransitionRejected(
+                "VF precheck transition rejected: target is not the "
+                "current deterministic precheck target."
+            )
+
+        if not self._vf_human_declaration_allows_declared(
+            source,
+            target,
+        ):
+            raise TransitionRejected(
+                "VF_DECLARED requires a complete HUMAN declaration "
+                "recorded for the current revision."
+            )
+
+        if not self._vf_final_integrity_allows_locking(
+            source,
+            target,
+        ):
+            raise TransitionRejected(
+                "VF_LOCKING_IN_PROGRESS requires a complete positive "
+                "final integrity result for the current revision."
+            )
+
+        if not self._vf_selected_result_allows_locked(
+            source,
+            target,
+        ):
+            raise TransitionRejected(
+                "VF_LOCKED requires the exact HUMAN-selected ResultVersion "
+                "with matching session, UUID, label, and SHA-256."
+            )
+
         if source is S.MEMORY_RETRIEVAL_RUNNING:
             if (
                 target is S.MEMORY_REVIEW_REQUIRED
@@ -480,6 +1148,27 @@ class SystemOrchestrator:
                 NEGATIVE_REASON_ZERO_ITEMS_AUTHORIZED_AFTER_HUMAN_REVIEW
             )
 
+        vf_lock_version_id: str | None = None
+        vf_lock_content_hash: str | None = None
+
+        if (
+            source is S.VF_LOCKING_IN_PROGRESS
+            and target is S.VF_LOCKED
+        ):
+            declaration = self.vf_human_declaration
+
+            if declaration is None:
+                raise TransitionRejected(
+                    "VF_LOCKED requires the HUMAN VF declaration."
+                )
+
+            vf_lock_version_id = (
+                declaration.selected_version_id
+            )
+            vf_lock_content_hash = (
+                declaration.selected_version_content_hash
+            )
+
         self.revision += 1
 
         record = TransitionRecord(
@@ -490,6 +1179,12 @@ class SystemOrchestrator:
             reason=reason,
             occurred_at=datetime.now(timezone.utc).isoformat(),
         )
+
+        if vf_lock_version_id is not None:
+            self.vf_locked_version_id = vf_lock_version_id
+            self.vf_locked_content_hash = (
+                vf_lock_content_hash
+            )
 
         self.state = target
         self.history.append(record)
