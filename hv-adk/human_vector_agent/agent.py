@@ -6,6 +6,7 @@ from .hv_core_bridge import (
     start_direction_draft,
     advance_direction_to_human_confirmation,
     advance_to_builder_v1_running,
+    prepare_builder_v1_direction,
     record_builder_v1_from_state,
 )
 
@@ -19,6 +20,12 @@ builder_v1_agent = Agent(
     ),
     instruction=(
         "You are the Builder AI inside HUMAN VECTOR. "
+        "The following package is the ONLY authoritative Human Direction "
+        "for this V1. It comes directly from the confirmed HUMAN artefact "
+        "and must not be replaced by a reconstructed or paraphrased direction. "
+        "\n\n--- CONFIRMED HUMAN DIRECTION PACKAGE ---\n"
+        "{hv_builder_direction_package}"
+        "\n--- END CONFIRMED HUMAN DIRECTION PACKAGE ---\n\n"
         "Your task is to construct the first substantive solution version, V1, "
         "from the HUMAN-authorized problem, direction, criteria, limits, and context "
         "provided to you. "
@@ -59,9 +66,11 @@ root_agent = Agent(
         "is DIRECTION_LOCKED may you use advance_to_builder_v1_running. "
         "That operation may automate only orchestrator-owned Builder V1 setup steps and "
         "must stop at BUILDER_V1_RUNNING. "
-        "When the core state is BUILDER_V1_RUNNING, invoke the dedicated Builder V1 agent "
-        "to construct V1 from the HUMAN-authorized problem, direction, criteria, limits, "
-        "and relevant context. "
+        "When the core state is BUILDER_V1_RUNNING, first call "
+        "prepare_builder_v1_direction. Only if that operation returns ok=true "
+        "may you invoke the dedicated Builder V1 agent. "
+        "The Builder must construct V1 only from the exact confirmed Human Direction "
+        "package injected into its ADK session state. "
         "After the Builder V1 agent completes, call record_builder_v1_from_state. "
         "Never copy, rewrite, summarize, paraphrase, or manually re-create the Builder "
         "output for V1 recording. The bridge must read the exact Builder output from "
@@ -78,6 +87,7 @@ root_agent = Agent(
         start_direction_draft,
         advance_direction_to_human_confirmation,
         advance_to_builder_v1_running,
+        prepare_builder_v1_direction,
         builder_v1_tool,
         record_builder_v1_from_state,
     ],

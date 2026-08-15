@@ -291,3 +291,90 @@ def record_builder_v1_from_state(tool_context: ToolContext) -> dict:
     result["builder_output_key"] = "hv_builder_v1_output"
     result["builder_output_source"] = "ADK_SESSION_STATE"
     return result
+
+def prepare_builder_v1_direction(tool_context: ToolContext) -> dict:
+    """Bind the exact confirmed Human Direction to ADK state for Builder V1.
+
+    This operation is technical only. It does not create, modify, confirm,
+    summarize, or reinterpret Human Direction.
+    """
+    from hashlib import sha256
+
+    if _orchestrator.state is not S.BUILDER_V1_RUNNING:
+        return {
+            "ok": False,
+            "state": _orchestrator.state.value,
+            "reason": (
+                "Builder direction package can only be prepared from "
+                "BUILDER_V1_RUNNING."
+            ),
+            "final_authority": "HUMAN",
+        }
+
+    direction = _orchestrator.human_direction_artifact
+
+    if (
+        direction is None
+        or direction.status != "CONFIRMED"
+        or direction.confirmed_revision is None
+    ):
+        return {
+            "ok": False,
+            "state": _orchestrator.state.value,
+            "reason": (
+                "Builder V1 requires an explicitly confirmed "
+                "Human Direction artefact."
+            ),
+            "final_authority": "HUMAN",
+        }
+
+    package = (
+        "HUMAN VECTOR — CONFIRMED HUMAN DIRECTION\n"
+        f"DIRECTION_ID: {direction.direction_id}\n"
+        f"CONFIRMED_REVISION: {direction.confirmed_revision}\n"
+        "\nOBJECTIVE:\n"
+        f"{direction.objective}\n"
+        "\nCONTEXT:\n"
+        f"{direction.context}\n"
+        "\nCRITERIA:\n"
+        f"{direction.criteria}\n"
+        "\nLIMITS:\n"
+        f"{direction.limits}\n"
+        "\nFACTS:\n"
+        f"{direction.facts}\n"
+        "\nASSUMPTIONS:\n"
+        f"{direction.assumptions}\n"
+        "\nINTENDED_USE:\n"
+        f"{direction.intended_use}\n"
+    )
+
+    package_hash = sha256(
+        package.encode("utf-8")
+    ).hexdigest()
+
+    tool_context.state[
+        "hv_builder_direction_package"
+    ] = package
+
+    tool_context.state[
+        "hv_builder_direction_id"
+    ] = direction.direction_id
+
+    tool_context.state[
+        "hv_builder_direction_confirmed_revision"
+    ] = direction.confirmed_revision
+
+    tool_context.state[
+        "hv_builder_direction_sha256"
+    ] = package_hash
+
+    return {
+        "ok": True,
+        "state": _orchestrator.state.value,
+        "direction_id": direction.direction_id,
+        "confirmed_revision": direction.confirmed_revision,
+        "direction_sha256": package_hash,
+        "builder_input_source": "CONFIRMED_HUMAN_DIRECTION",
+        "exact_human_wording_preserved": True,
+        "final_authority": "HUMAN",
+    }
