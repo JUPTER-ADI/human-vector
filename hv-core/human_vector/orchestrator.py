@@ -335,6 +335,21 @@ class TransitionRecord:
 
 
 @dataclass(frozen=True)
+class HumanDirection:
+    direction_id: str
+    objective: str
+    context: str
+    criteria: str
+    limits: str
+    facts: str
+    assumptions: str
+    intended_use: str
+    status: str
+    created_revision: int
+    confirmed_revision: int | None = None
+
+
+@dataclass(frozen=True)
 class HumanCognitiveResponse:
     response_id: str
     session_id: str
@@ -358,6 +373,8 @@ class SystemOrchestrator:
     history: list[TransitionRecord] = field(default_factory=list)
     session_id: str | None = None
     result_versions: dict[str, ResultVersion] = field(default_factory=dict)
+    human_direction_artifact: HumanDirection | None = None
+    human_direction_history: list[HumanDirection] = field(default_factory=list)
     human_response_artifact: HumanCognitiveResponse | None = None
     human_response_history: list[HumanCognitiveResponse] = field(default_factory=list)
     vf_locked_version_id: str | None = None
@@ -385,6 +402,122 @@ class SystemOrchestrator:
     final_report_reviews: list[FinalReportReview] = field(default_factory=list)
     final_report_review: FinalReportReview | None = None
     final_report_review_revision: int | None = None
+
+    def record_human_direction_draft(
+        self,
+        *,
+        objective: str,
+        context: str,
+        criteria: str,
+        limits: str,
+        facts: str = "",
+        assumptions: str = "",
+        intended_use: str = "",
+        actor: Actor,
+    ) -> HumanDirection:
+        from uuid import uuid4
+
+        if actor is not Actor.HUMAN:
+            raise TransitionRejected(
+                "Human Direction requires HUMAN actor."
+            )
+
+        if self.state is not S.DIRECTION_DRAFT:
+            raise TransitionRejected(
+                "Human Direction draft requires DIRECTION_DRAFT."
+            )
+
+        required = {
+            "objective": objective,
+            "context": context,
+            "criteria": criteria,
+            "limits": limits,
+        }
+
+        missing = [
+            name
+            for name, value in required.items()
+            if not isinstance(value, str) or not value.strip()
+        ]
+
+        if missing:
+            raise TransitionRejected(
+                "Human Direction missing required fields: "
+                + ", ".join(sorted(missing))
+            )
+
+        for name, value in {
+            "facts": facts,
+            "assumptions": assumptions,
+            "intended_use": intended_use,
+        }.items():
+            if not isinstance(value, str):
+                raise TransitionRejected(
+                    f"Human Direction {name} must be text."
+                )
+
+        current = self.human_direction_artifact
+
+        if current is not None and current.status == "CONFIRMED":
+            raise TransitionRejected(
+                "Confirmed Human Direction is locked."
+            )
+
+        artifact = HumanDirection(
+            direction_id=str(uuid4()),
+            objective=objective,
+            context=context,
+            criteria=criteria,
+            limits=limits,
+            facts=facts,
+            assumptions=assumptions,
+            intended_use=intended_use,
+            status="DRAFT",
+            created_revision=self.revision,
+        )
+
+        self.human_direction_artifact = artifact
+        self.human_direction_history.append(artifact)
+        return artifact
+
+    def confirm_human_direction(
+        self,
+        *,
+        actor: Actor,
+    ) -> HumanDirection:
+        if actor is not Actor.HUMAN:
+            raise TransitionRejected(
+                "Human Direction confirmation requires HUMAN actor."
+            )
+
+        if self.state is not S.DIRECTION_CONFIRMATION_REQUIRED:
+            raise TransitionRejected(
+                "Human Direction confirmation requires "
+                "DIRECTION_CONFIRMATION_REQUIRED."
+            )
+
+        direction = self.human_direction_artifact
+
+        if direction is None or direction.status != "DRAFT":
+            raise TransitionRejected(
+                "Human Direction confirmation requires a current draft."
+            )
+
+        self.transition(
+            S.DIRECTION_LOCKED,
+            Actor.HUMAN,
+            "HUMAN explicitly confirmed and locked direction.",
+        )
+
+        confirmed = replace(
+            direction,
+            status="CONFIRMED",
+            confirmed_revision=self.revision,
+        )
+
+        self.human_direction_artifact = confirmed
+        self.human_direction_history.append(confirmed)
+        return confirmed
 
     def _resolve_v1_for_human_response(self) -> ResultVersion:
         versions = [
