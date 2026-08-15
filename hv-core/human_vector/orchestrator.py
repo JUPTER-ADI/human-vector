@@ -366,6 +366,65 @@ class HumanCognitiveResponse:
     confirmed_revision: int | None = None
 
 
+@dataclass(frozen=True)
+class CriticAnalysisPackage:
+    package_id: str
+    session_id: str
+    direction_id: str
+    direction_confirmed_revision: int
+    v1_version_id: str
+    v1_content_hash: str
+    human_response_id: str
+    human_response_confirmed_revision: int
+    verified_elements: str
+    unverified_elements: str
+    human_questions: str
+    relevant_principles: str
+    separation_requirement: str
+    package_content: str
+    package_hash: str
+    status: str
+    created_revision: int
+    ready_revision: int | None = None
+
+
+@dataclass(frozen=True)
+class Criticism:
+    criticism_id: str
+    review_id: str
+    session_id: str
+    source_version_id: str
+    source_content_hash: str
+    human_response_id: str
+    object: str
+    criticism_type: str
+    explanation: str
+    basis: str
+    risk: str
+    severity: str
+    question: str
+    verification_required: str
+    correction_direction: str
+    provenance: str
+    status: str
+    created_revision: int
+
+
+@dataclass(frozen=True)
+class CriticReview:
+    review_id: str
+    package_id: str
+    session_id: str
+    source_version_id: str
+    source_content_hash: str
+    human_response_id: str
+    raw_output: str
+    raw_output_hash: str
+    criticisms: tuple[Criticism, ...]
+    actor: str
+    created_revision: int
+
+
 @dataclass
 class SystemOrchestrator:
     state: S = S.SESSION_CREATED
@@ -377,6 +436,10 @@ class SystemOrchestrator:
     human_direction_history: list[HumanDirection] = field(default_factory=list)
     human_response_artifact: HumanCognitiveResponse | None = None
     human_response_history: list[HumanCognitiveResponse] = field(default_factory=list)
+    critic_package_artifact: CriticAnalysisPackage | None = None
+    critic_package_history: list[CriticAnalysisPackage] = field(default_factory=list)
+    critic_review_artifact: CriticReview | None = None
+    critic_review_history: list[CriticReview] = field(default_factory=list)
     vf_locked_version_id: str | None = None
     vf_locked_content_hash: str | None = None
     retrieval_outcome: str | None = None
@@ -707,6 +770,370 @@ class SystemOrchestrator:
         self.human_response_artifact = confirmed
         self.human_response_history.append(confirmed)
         return confirmed
+
+    def prepare_critic_package(
+        self,
+        *,
+        verified_elements: str,
+        unverified_elements: str,
+        relevant_principles: str,
+        actor: Actor,
+    ) -> CriticAnalysisPackage:
+        from hashlib import sha256
+        from uuid import uuid4
+
+        if actor is not Actor.ORCHESTRATOR:
+            raise TransitionRejected(
+                "Critic package preparation requires ORCHESTRATOR actor."
+            )
+
+        if self.state is not S.HUMAN_RESPONSE_CAPTURED:
+            raise TransitionRejected(
+                "Critic package preparation requires "
+                "HUMAN_RESPONSE_CAPTURED."
+            )
+
+        if self.critic_package_artifact is not None:
+            raise TransitionRejected(
+                "Critic analysis package already exists."
+            )
+
+        direction = self.human_direction_artifact
+        response = self.human_response_artifact
+        source_v1 = self._resolve_v1_for_human_response()
+
+        if (
+            direction is None
+            or direction.status != "CONFIRMED"
+            or direction.confirmed_revision is None
+        ):
+            raise TransitionRejected(
+                "Critic package requires confirmed Human Direction."
+            )
+
+        if (
+            response is None
+            or response.status != "CONFIRMED"
+            or response.confirmed_revision is None
+        ):
+            raise TransitionRejected(
+                "Critic package requires confirmed HUMAN cognitive response."
+            )
+
+        if response.source_version_id != source_v1.version_id:
+            raise TransitionRejected(
+                "Confirmed HUMAN response is not bound to current V1."
+            )
+
+        if response.source_content_hash != source_v1.content_hash:
+            raise TransitionRejected(
+                "Confirmed HUMAN response V1 hash mismatch."
+            )
+
+        for name, value in {
+            "verified_elements": verified_elements,
+            "unverified_elements": unverified_elements,
+            "relevant_principles": relevant_principles,
+        }.items():
+            if not isinstance(value, str) or not value.strip():
+                raise TransitionRejected(
+                    f"Critic package {name} must be non-empty text."
+                )
+
+        separation_requirement = (
+            "Critic AI must explicitly distinguish FACTS, ASSUMPTIONS, "
+            "INTERPRETATIONS, and UNVERIFIED CLAIMS. It must not confirm "
+            "Builder AI or HUMAN by default and must not modify V1 or "
+            "rewrite the HUMAN contribution."
+        )
+
+        package_content = (
+            "HUMAN VECTOR — INDEPENDENT CRITIC PACKAGE\n"
+            f"SESSION_ID: {source_v1.session_id}\n"
+            f"DIRECTION_ID: {direction.direction_id}\n"
+            f"DIRECTION_CONFIRMED_REVISION: "
+            f"{direction.confirmed_revision}\n"
+            f"V1_VERSION_ID: {source_v1.version_id}\n"
+            f"V1_CONTENT_HASH: {source_v1.content_hash}\n"
+            f"HUMAN_RESPONSE_ID: {response.response_id}\n"
+            f"HUMAN_RESPONSE_CONFIRMED_REVISION: "
+            f"{response.confirmed_revision}\n"
+            "\n--- HUMAN DIRECTION ---\n"
+            f"OBJECTIVE:\n{direction.objective}\n"
+            f"CONTEXT:\n{direction.context}\n"
+            f"CRITERIA:\n{direction.criteria}\n"
+            f"LIMITS:\n{direction.limits}\n"
+            f"FACTS:\n{direction.facts}\n"
+            f"ASSUMPTIONS:\n{direction.assumptions}\n"
+            f"INTENDED_USE:\n{direction.intended_use}\n"
+            "\n--- EXACT BUILDER V1 ---\n"
+            f"{source_v1.content}\n"
+            "\n--- CONFIRMED HUMAN COGNITIVE RESPONSE ---\n"
+            f"OBSERVATION:\n{response.observation}\n"
+            f"CONTRADICTION:\n{response.contradiction}\n"
+            f"OWN_IDEA:\n{response.own_idea}\n"
+            f"RISKS:\n{response.risks}\n"
+            f"HUMAN_QUESTIONS_TO_CRITIC:\n"
+            f"{response.critic_questions}\n"
+            "\n--- VERIFICATION CONTEXT ---\n"
+            f"VERIFIED_ELEMENTS:\n{verified_elements}\n"
+            f"UNVERIFIED_ELEMENTS:\n{unverified_elements}\n"
+            f"RELEVANT_HUMAN_VECTOR_PRINCIPLES:\n"
+            f"{relevant_principles}\n"
+            f"SEPARATION_REQUIREMENT:\n"
+            f"{separation_requirement}\n"
+        )
+
+        package_hash = sha256(
+            package_content.encode("utf-8")
+        ).hexdigest()
+
+        package_id = str(uuid4())
+
+        self.transition(
+            S.CRITIC_PACKAGE_PREPARATION,
+            Actor.ORCHESTRATOR,
+            "Prepare independent Critic AI package from confirmed artefacts.",
+        )
+
+        package = CriticAnalysisPackage(
+            package_id=package_id,
+            session_id=source_v1.session_id,
+            direction_id=direction.direction_id,
+            direction_confirmed_revision=direction.confirmed_revision,
+            v1_version_id=source_v1.version_id,
+            v1_content_hash=source_v1.content_hash,
+            human_response_id=response.response_id,
+            human_response_confirmed_revision=response.confirmed_revision,
+            verified_elements=verified_elements,
+            unverified_elements=unverified_elements,
+            human_questions=response.critic_questions,
+            relevant_principles=relevant_principles,
+            separation_requirement=separation_requirement,
+            package_content=package_content,
+            package_hash=package_hash,
+            status="PREPARED",
+            created_revision=self.revision,
+        )
+
+        self.critic_package_artifact = package
+        self.critic_package_history.append(package)
+
+        return package
+
+    def mark_critic_ready(
+        self,
+        *,
+        actor: Actor,
+    ) -> CriticAnalysisPackage:
+        if actor is not Actor.ORCHESTRATOR:
+            raise TransitionRejected(
+                "CRITIC_READY requires ORCHESTRATOR actor."
+            )
+
+        if self.state is not S.CRITIC_PACKAGE_PREPARATION:
+            raise TransitionRejected(
+                "CRITIC_READY requires CRITIC_PACKAGE_PREPARATION."
+            )
+
+        package = self.critic_package_artifact
+
+        if package is None or package.status != "PREPARED":
+            raise TransitionRejected(
+                "CRITIC_READY requires a prepared Critic package."
+            )
+
+        self.transition(
+            S.CRITIC_READY,
+            Actor.ORCHESTRATOR,
+            "Independent Critic package complete and ready.",
+        )
+
+        ready = replace(
+            package,
+            status="READY",
+            ready_revision=self.revision,
+        )
+
+        self.critic_package_artifact = ready
+        self.critic_package_history.append(ready)
+
+        return ready
+
+    def start_critic_running(
+        self,
+        *,
+        actor: Actor,
+    ) -> CriticAnalysisPackage:
+        if actor is not Actor.ORCHESTRATOR:
+            raise TransitionRejected(
+                "CRITIC_RUNNING setup requires ORCHESTRATOR actor."
+            )
+
+        if self.state is not S.CRITIC_READY:
+            raise TransitionRejected(
+                "CRITIC_RUNNING requires CRITIC_READY."
+            )
+
+        package = self.critic_package_artifact
+
+        if package is None or package.status != "READY":
+            raise TransitionRejected(
+                "CRITIC_RUNNING requires a READY Critic package."
+            )
+
+        self.transition(
+            S.CRITIC_RUNNING,
+            Actor.ORCHESTRATOR,
+            "Start independent Critic AI execution.",
+        )
+
+        return package
+
+    def record_critic_review(
+        self,
+        *,
+        criticisms: list[dict[str, str]],
+        raw_output: str,
+        actor: Actor,
+    ) -> CriticReview:
+        from hashlib import sha256
+        from uuid import uuid4
+
+        if actor is not Actor.CRITIC_AI:
+            raise TransitionRejected(
+                "Critic review recording requires CRITIC_AI actor."
+            )
+
+        if self.state is not S.CRITIC_RUNNING:
+            raise TransitionRejected(
+                "Critic review recording requires CRITIC_RUNNING."
+            )
+
+        if self.critic_review_artifact is not None:
+            raise TransitionRejected(
+                "Critic review already recorded."
+            )
+
+        package = self.critic_package_artifact
+
+        if package is None or package.status != "READY":
+            raise TransitionRejected(
+                "Critic review requires the exact READY Critic package."
+            )
+
+        if not isinstance(raw_output, str) or not raw_output.strip():
+            raise TransitionRejected(
+                "Critic review requires non-empty raw output."
+            )
+
+        if not isinstance(criticisms, list) or not criticisms:
+            raise TransitionRejected(
+                "Critic review requires at least one structured criticism."
+            )
+
+        required_fields = (
+            "object",
+            "type",
+            "explanation",
+            "basis",
+            "risk",
+            "severity",
+            "question",
+            "verification_required",
+            "correction_direction",
+        )
+
+        normalized: list[dict[str, str]] = []
+
+        for index, item in enumerate(criticisms, start=1):
+            if not isinstance(item, dict):
+                raise TransitionRejected(
+                    f"Criticism {index} must be a mapping."
+                )
+
+            missing = [
+                field_name
+                for field_name in required_fields
+                if (
+                    field_name not in item
+                    or not isinstance(item[field_name], str)
+                    or not item[field_name].strip()
+                )
+            ]
+
+            if missing:
+                raise TransitionRejected(
+                    f"Criticism {index} missing required fields: "
+                    + ", ".join(sorted(missing))
+                )
+
+            normalized.append(
+                {
+                    field_name: item[field_name]
+                    for field_name in required_fields
+                }
+            )
+
+        review_id = str(uuid4())
+        raw_output_hash = sha256(
+            raw_output.encode("utf-8")
+        ).hexdigest()
+
+        criticism_ids = [
+            str(uuid4())
+            for _ in normalized
+        ]
+
+        self.transition(
+            S.CRITIC_REVIEW_GENERATED,
+            Actor.CRITIC_AI,
+            "Independent Critic AI review generated and recorded.",
+        )
+
+        structured = tuple(
+            Criticism(
+                criticism_id=criticism_id,
+                review_id=review_id,
+                session_id=package.session_id,
+                source_version_id=package.v1_version_id,
+                source_content_hash=package.v1_content_hash,
+                human_response_id=package.human_response_id,
+                object=item["object"],
+                criticism_type=item["type"],
+                explanation=item["explanation"],
+                basis=item["basis"],
+                risk=item["risk"],
+                severity=item["severity"],
+                question=item["question"],
+                verification_required=item["verification_required"],
+                correction_direction=item["correction_direction"],
+                provenance=Actor.CRITIC_AI.value,
+                status="UNREVIEWED",
+                created_revision=self.revision,
+            )
+            for criticism_id, item
+            in zip(criticism_ids, normalized)
+        )
+
+        review = CriticReview(
+            review_id=review_id,
+            package_id=package.package_id,
+            session_id=package.session_id,
+            source_version_id=package.v1_version_id,
+            source_content_hash=package.v1_content_hash,
+            human_response_id=package.human_response_id,
+            raw_output=raw_output,
+            raw_output_hash=raw_output_hash,
+            criticisms=structured,
+            actor=Actor.CRITIC_AI.value,
+            created_revision=self.revision,
+        )
+
+        self.critic_review_artifact = review
+        self.critic_review_history.append(review)
+
+        return review
 
     def _vf_final_integrity_allows_locking(
         self,
