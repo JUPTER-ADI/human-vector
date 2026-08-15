@@ -1,3 +1,5 @@
+import json
+from dataclasses import asdict
 from uuid import UUID, uuid4
 from google.adk.tools import ToolContext
 from human_vector.orchestrator import Actor, SystemOrchestrator, TransitionRejected
@@ -376,5 +378,171 @@ def prepare_builder_v1_direction(tool_context: ToolContext) -> dict:
         "direction_sha256": package_hash,
         "builder_input_source": "CONFIRMED_HUMAN_DIRECTION",
         "exact_human_wording_preserved": True,
+        "final_authority": "HUMAN",
+    }
+def prepare_critic_analysis(
+    verified_elements: str,
+    unverified_elements: str,
+    relevant_principles: str,
+    tool_context: ToolContext,
+) -> dict:
+    """Bind the exact CORE CriticAnalysisPackage into ADK session state.
+
+    ORCHESTRATOR performs only the technical Critic setup:
+    HUMAN_RESPONSE_CAPTURED -> CRITIC_PACKAGE_PREPARATION
+    -> CRITIC_READY -> CRITIC_RUNNING.
+
+    This function does not create, rewrite, approve, select, or transfer
+    any HUMAN contribution or Critic criticism.
+    """
+    if _orchestrator.state is not S.HUMAN_RESPONSE_CAPTURED:
+        return {
+            "ok": False,
+            "state": _orchestrator.state.value,
+            "reason": (
+                "Critic analysis can only start from "
+                "HUMAN_RESPONSE_CAPTURED."
+            ),
+            "final_authority": "HUMAN",
+        }
+
+    try:
+        _orchestrator.prepare_critic_package(
+            verified_elements=verified_elements,
+            unverified_elements=unverified_elements,
+            relevant_principles=relevant_principles,
+            actor=Actor.ORCHESTRATOR,
+        )
+        _orchestrator.mark_critic_ready(
+            actor=Actor.ORCHESTRATOR,
+        )
+        package = _orchestrator.start_critic_running(
+            actor=Actor.ORCHESTRATOR,
+        )
+    except TransitionRejected as exc:
+        return {
+            "ok": False,
+            "state": _orchestrator.state.value,
+            "reason": str(exc),
+            "final_authority": "HUMAN",
+        }
+
+    package_json = json.dumps(
+        asdict(package),
+        ensure_ascii=False,
+        sort_keys=True,
+        default=str,
+    )
+
+    tool_context.state["hv_critic_analysis_package"] = package_json
+    tool_context.state["hv_critic_input_source"] = "CORE_CRITIC_ANALYSIS_PACKAGE"
+
+    return {
+        "ok": True,
+        "state": _orchestrator.state.value,
+        "critic_input_key": "hv_critic_analysis_package",
+        "critic_input_source": "CORE_CRITIC_ANALYSIS_PACKAGE",
+        "package": package_json,
+        "final_authority": "HUMAN",
+    }
+
+
+def record_critic_review_from_state(
+    tool_context: ToolContext,
+) -> dict:
+    """Record the exact Critic Gemini output saved by ADK output_key.
+
+    The ORCHESTRATOR does not receive Critic content as an LLM-supplied
+    argument. It reads the exact Critic output directly from ADK state,
+    parses the structured criticisms, and records both the criticisms
+    and the untouched raw output in CORE.
+    """
+    if _orchestrator.state is not S.CRITIC_RUNNING:
+        return {
+            "ok": False,
+            "state": _orchestrator.state.value,
+            "reason": (
+                "Critic review can only be recorded from CRITIC_RUNNING."
+            ),
+            "final_authority": "HUMAN",
+        }
+
+    raw_output = tool_context.state.get("hv_critic_output")
+
+    if not isinstance(raw_output, str) or not raw_output.strip():
+        return {
+            "ok": False,
+            "state": _orchestrator.state.value,
+            "reason": "No exact Critic output is available in ADK session state.",
+            "critic_output_key": "hv_critic_output",
+            "final_authority": "HUMAN",
+        }
+
+    candidate = raw_output.strip()
+
+    # Accept a fenced JSON response for runtime robustness while preserving
+    # the original raw Gemini output unchanged for provenance/hash in CORE.
+    if candidate.startswith("```"):
+        lines = candidate.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        candidate = "\n".join(lines).strip()
+
+    try:
+        payload = json.loads(candidate)
+    except json.JSONDecodeError as exc:
+        return {
+            "ok": False,
+            "state": _orchestrator.state.value,
+            "reason": f"Critic output is not valid JSON: {exc}",
+            "critic_output_key": "hv_critic_output",
+            "final_authority": "HUMAN",
+        }
+
+    if not isinstance(payload, dict):
+        return {
+            "ok": False,
+            "state": _orchestrator.state.value,
+            "reason": "Critic output must be a JSON object.",
+            "final_authority": "HUMAN",
+        }
+
+    criticisms = payload.get("criticisms")
+
+    if not isinstance(criticisms, list) or not criticisms:
+        return {
+            "ok": False,
+            "state": _orchestrator.state.value,
+            "reason": (
+                "Critic output must contain a non-empty "
+                "'criticisms' list."
+            ),
+            "final_authority": "HUMAN",
+        }
+
+    try:
+        review = _orchestrator.record_critic_review(
+            criticisms=criticisms,
+            raw_output=raw_output,
+            actor=Actor.CRITIC_AI,
+        )
+    except (TransitionRejected, ValueError, TypeError) as exc:
+        return {
+            "ok": False,
+            "state": _orchestrator.state.value,
+            "reason": str(exc),
+            "final_authority": "HUMAN",
+        }
+
+    tool_context.state["hv_critic_review_recorded"] = True
+
+    return {
+        "ok": True,
+        "state": _orchestrator.state.value,
+        "critic_output_key": "hv_critic_output",
+        "critic_output_source": "ADK_SESSION_STATE",
+        "criticism_count": len(review.criticisms),
         "final_authority": "HUMAN",
     }

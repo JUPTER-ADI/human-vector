@@ -8,6 +8,8 @@ from .hv_core_bridge import (
     advance_to_builder_v1_running,
     prepare_builder_v1_direction,
     record_builder_v1_from_state,
+    prepare_critic_analysis,
+    record_critic_review_from_state,
 )
 
 
@@ -49,6 +51,54 @@ builder_v1_tool = AgentTool(
 )
 
 
+
+critic_v1_agent = Agent(
+    name="human_vector_critic_v1",
+    model="gemini-3.5-flash",
+    description=(
+        "Independent HUMAN VECTOR Critic AI. "
+        "Challenges Builder V1 and the HUMAN cognitive response "
+        "without taking HUMAN authority."
+    ),
+    instruction=(
+        "You are the HUMAN VECTOR independent Critic AI. "
+        "You are NOT the Builder AI and you must not behave as the Builder. "
+        "Analyze independently the exact CriticAnalysisPackage supplied below. "
+        "Do not rewrite, modify, summarize, or replace the source V1. "
+        "Do not rewrite or replace the HUMAN cognitive response. "
+        "Do not automatically confirm Builder AI. "
+        "Do not automatically confirm the HUMAN position. "
+        "You may challenge either position when evidence, logic, assumptions, "
+        "risk, feasibility, direction, provenance, or missing information justify it. "
+        "Keep FACTS, ASSUMPTIONS, INTERPRETATIONS, and UNVERIFIED CLAIMS distinct. "
+        "Expose contradictions, hidden assumptions, missing evidence, risks, "
+        "weak logic, ignored alternatives, and deviations from the confirmed "
+        "Human Direction. "
+        "Do not accept or reject criticisms on behalf of the human. "
+        "Do not select anything for reconstruction. "
+        "Do not perform cognitive transfer. "
+        "Do not declare VF or any final HUMAN decision. "
+        "Final cognitive authority remains HUMAN. "
+        "\n\nEXACT CORE CRITIC ANALYSIS PACKAGE:\n"
+        "{hv_critic_analysis_package}"
+        "\n\nReturn ONLY valid JSON. Do not use Markdown or code fences. "
+        "The top-level JSON object must contain one key named criticisms. "
+        "criticisms must be a non-empty array of criticism objects. "
+        "Every criticism object must contain these string fields: "
+        "object, type, explanation, basis, risk, severity, question, "
+        "verification_required, correction_direction. "
+        "Each criticism must be concrete and independently reasoned. "
+        "Do not add a HUMAN selection, HUMAN verdict, transfer approval, "
+        "or final decision."
+    ),
+    output_key="hv_critic_output",
+)
+
+critic_v1_tool = AgentTool(
+    agent=critic_v1_agent,
+)
+
+
 root_agent = Agent(
     name="human_vector_agent",
     model="gemini-3.5-flash",
@@ -81,6 +131,20 @@ root_agent = Agent(
         "or criticism where applicable, and at least one own idea or contribution. "
         "Never simulate HUMAN authority and never make final HUMAN decisions. "
         "Final authority belongs exclusively to the human."
+        "After the HUMAN cognitive response is explicitly captured, "
+        "the next AI stage is the independent Critic. "
+        "Only from HUMAN_RESPONSE_CAPTURED may you call prepare_critic_analysis. "
+        "Do not invent verified elements, unverified elements, or HUMAN claims. "
+        "Use only explicit session/HUMAN information available for those fields. "
+        "When prepare_critic_analysis returns ok=true and state=CRITIC_RUNNING, "
+        "call critic_v1_tool exactly once for that Critic package. "
+        "The Critic must analyze only the exact package injected into ADK state. "
+        "After the Critic finishes, call record_critic_review_from_state. "
+        "Never copy, paraphrase, summarize, or manually recreate the Critic output "
+        "before recording it; the bridge must read the exact output_key value. "
+        "After CriticReview is recorded, stop before any HUMAN criticism selection. "
+        "Never accept, reject, partially accept, transfer, or resolve a criticism "
+        "on behalf of the human. "
     ),
     tools=[
         get_human_vector_core_status,
@@ -89,6 +153,9 @@ root_agent = Agent(
         advance_to_builder_v1_running,
         prepare_builder_v1_direction,
         builder_v1_tool,
-        record_builder_v1_from_state,
+        record_builder_v1_from_state,        prepare_critic_analysis,
+        critic_v1_tool,
+        record_critic_review_from_state,
+
     ],
 )
