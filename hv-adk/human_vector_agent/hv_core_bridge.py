@@ -267,3 +267,27 @@ def record_builder_v1(v1_content: str, tool_context: ToolContext) -> dict:
         "human_response_required": True,
         "final_authority": "HUMAN",
     }
+
+def record_builder_v1_from_state(tool_context: ToolContext) -> dict:
+    """Record the exact Builder V1 saved by ADK output_key.
+
+    The orchestrator does not receive V1 content as an LLM-supplied argument.
+    It reads the exact Builder AI final response directly from session state.
+    """
+    v1_content = tool_context.state.get("hv_builder_v1_output")
+
+    if not isinstance(v1_content, str) or not v1_content.strip():
+        return {
+            "ok": False,
+            "state": _orchestrator.state.value,
+            "reason": (
+                "No exact Builder V1 output is available in ADK session state."
+            ),
+            "builder_output_key": "hv_builder_v1_output",
+            "final_authority": "HUMAN",
+        }
+
+    result = record_builder_v1(v1_content, tool_context)
+    result["builder_output_key"] = "hv_builder_v1_output"
+    result["builder_output_source"] = "ADK_SESSION_STATE"
+    return result
