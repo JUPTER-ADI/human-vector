@@ -175,6 +175,7 @@ AGENT_OWNED_TRANSITIONS = {
     (S.VF_LOCKING_IN_PROGRESS, S.VF_LOCKED): Actor.SYSTEM,
     (S.VF_LOCKED, S.FINAL_REPORT_GENERATION): Actor.SYSTEM,
     (S.FINAL_REPORT_GENERATION, S.FINAL_REPORT_READY): Actor.SYSTEM,
+    (S.FINAL_REPORT_READY, S.FINAL_REPORT_GENERATION): Actor.SYSTEM,
     (S.FINAL_REPORT_READY, S.SESSION_ARCHIVED): Actor.SYSTEM,
 }
 
@@ -277,6 +278,53 @@ class MemoryEffectVerification:
 
 
 @dataclass(frozen=True)
+class FinalReport:
+    report_version: int
+    session_id: str
+    vf_version_id: str
+    vf_version_label: str
+    vf_content_hash: str
+    vf_content: str
+    version_path: tuple[str, ...]
+    choice_reason: str
+    relation_to_initial_direction: str
+    decisive_human_contribution: str
+    integrated_builder_elements: str
+    decisive_critics: str
+    rejected_critics: str
+    memory_basis: str
+    memory_effect_evidence: tuple[str, ...]
+    verifications_performed: str
+    remaining_risks_and_uncertainties: str
+    preserved_contradictions: str
+    intended_use: str
+    decision_assumption: str
+    declaration_persisted: bool
+    actor_persisted: bool
+    moment_persisted: bool
+    provenance_persisted: bool
+    selected_version_bound: bool
+    no_unresolved_technical_error: bool
+    integrity_reasons: str
+    supersedes_report_version: int | None
+    human_review_basis_outcome: str | None
+    human_review_basis_note: str | None
+    revision_response: str | None
+    human_declaration_revision: int
+    integrity_checked_revision: int
+    generated_revision: int
+
+
+@dataclass(frozen=True)
+class FinalReportReview:
+    report_version: int
+    outcome: str
+    review_note: str
+    report_generated_revision: int
+    reviewed_revision: int
+
+
+@dataclass(frozen=True)
 class TransitionRecord:
     revision: int
     source: S
@@ -312,6 +360,12 @@ class SystemOrchestrator:
     vf_human_declaration_revision: int | None = None
     vf_final_integrity_result: VFFinalIntegrityResult | None = None
     vf_final_integrity_revision: int | None = None
+    final_reports: list[FinalReport] = field(default_factory=list)
+    final_report: FinalReport | None = None
+    final_report_revision: int | None = None
+    final_report_reviews: list[FinalReportReview] = field(default_factory=list)
+    final_report_review: FinalReportReview | None = None
+    final_report_review_revision: int | None = None
 
     def _vf_final_integrity_allows_locking(
         self,
@@ -337,6 +391,408 @@ class SystemOrchestrator:
             and result.selected_version_bound
             and result.no_unresolved_technical_error
         )
+
+    def _final_report_allows_ready(
+        self,
+        source: S,
+        target: S,
+    ) -> bool:
+        if not (
+            source is S.FINAL_REPORT_GENERATION
+            and target is S.FINAL_REPORT_READY
+        ):
+            return True
+
+        report = self.final_report
+
+        if (
+            report is None
+            or self.final_report_revision != self.revision
+            or self.session_id is None
+            or self.vf_locked_version_id is None
+            or self.vf_locked_content_hash is None
+        ):
+            return False
+
+        selected = self.result_versions.get(
+            self.vf_locked_version_id
+        )
+
+        if selected is None:
+            return False
+
+        from hashlib import sha256
+
+        actual_content_hash = sha256(
+            selected.content.encode("utf-8")
+        ).hexdigest()
+
+        return (
+            report.session_id == self.session_id
+            and report.vf_version_id == self.vf_locked_version_id
+            and report.vf_content_hash == self.vf_locked_content_hash
+            and report.generated_revision == self.revision
+            and selected.session_id == self.session_id
+            and selected.version_id == report.vf_version_id
+            and selected.version_label == report.vf_version_label
+            and selected.content == report.vf_content
+            and selected.content_hash == report.vf_content_hash
+            and actual_content_hash == selected.content_hash
+        )
+
+    def record_final_report(
+        self,
+        *,
+        actor: Actor,
+        revision_response: str | None = None,
+    ) -> FinalReport:
+        if self.state is not S.FINAL_REPORT_GENERATION:
+            raise TransitionRejected(
+                "Final report can only be generated in "
+                "FINAL_REPORT_GENERATION."
+            )
+
+        if actor is not Actor.SYSTEM:
+            raise TransitionRejected(
+                "Final report generation requires SYSTEM actor."
+            )
+
+        if self.final_report_revision == self.revision:
+            raise TransitionRejected(
+                "Final report is already recorded for this revision."
+            )
+
+        if (
+            self.session_id is None
+            or self.vf_locked_version_id is None
+            or self.vf_locked_content_hash is None
+        ):
+            raise TransitionRejected(
+                "Final report requires a locked VF artifact."
+            )
+
+        declaration = self.vf_human_declaration
+        integrity = self.vf_final_integrity_result
+
+        if (
+            declaration is None
+            or self.vf_human_declaration_revision is None
+        ):
+            raise TransitionRejected(
+                "Final report requires the persisted HUMAN VF declaration."
+            )
+
+        if (
+            integrity is None
+            or self.vf_final_integrity_revision is None
+        ):
+            raise TransitionRejected(
+                "Final report requires the persisted final integrity result."
+            )
+
+        if not (
+            integrity.declaration_persisted
+            and integrity.actor_persisted
+            and integrity.moment_persisted
+            and integrity.provenance_persisted
+            and integrity.selected_version_bound
+            and integrity.no_unresolved_technical_error
+        ):
+            raise TransitionRejected(
+                "Final report requires a complete positive final integrity result."
+            )
+
+        selected = self.result_versions.get(
+            self.vf_locked_version_id
+        )
+
+        if selected is None:
+            raise TransitionRejected(
+                "Locked VF ResultVersion is not available."
+            )
+
+        from hashlib import sha256
+
+        actual_content_hash = sha256(
+            selected.content.encode("utf-8")
+        ).hexdigest()
+
+        if not (
+            selected.session_id == self.session_id
+            and selected.version_id == self.vf_locked_version_id
+            and selected.version_id == declaration.selected_version_id
+            and selected.version_label == declaration.selected_version
+            and selected.content_hash == self.vf_locked_content_hash
+            and selected.content_hash
+            == declaration.selected_version_content_hash
+            and actual_content_hash == selected.content_hash
+        ):
+            raise TransitionRejected(
+                "Final report source does not match the exact locked "
+                "HUMAN-selected VF artifact."
+            )
+
+        ordered_versions = sorted(
+            (
+                result
+                for result in self.result_versions.values()
+                if result.session_id == self.session_id
+            ),
+            key=lambda result: (
+                result.created_revision,
+                result.version_label,
+                result.version_id,
+            ),
+        )
+
+        version_path = tuple(
+            f"{result.version_label}:{result.version_id}"
+            for result in ordered_versions
+        )
+
+        memory_effect_evidence = tuple(
+            (
+                f"{evidence.memory_selection_item_id}|"
+                f"{evidence.outcome}|"
+                f"{evidence.reason}|"
+                f"revision={evidence.verified_revision}"
+            )
+            for evidence in self.memory_effect_verifications
+        )
+
+        review_basis = None
+        supersedes_report_version = None
+        normalized_revision_response = None
+
+        if self.final_report is not None:
+            review_basis = self.final_report_review
+
+            if (
+                review_basis is None
+                or self.final_report_review_revision != self.revision - 1
+                or review_basis.reviewed_revision != self.revision - 1
+                or review_basis.report_version
+                != self.final_report.report_version
+                or review_basis.report_generated_revision
+                != self.final_report.generated_revision
+                or review_basis.outcome not in {
+                    "CORRECTED",
+                    "CONTESTED",
+                }
+            ):
+                raise TransitionRejected(
+                    "Revised FinalReport requires the immediately prior "
+                    "HUMAN CORRECTED or CONTESTED review."
+                )
+
+            normalized_revision_response = (
+                revision_response or ""
+            ).strip()
+
+            if not normalized_revision_response:
+                raise TransitionRejected(
+                    "Revised FinalReport requires a non-empty SYSTEM "
+                    "response to the HUMAN review."
+                )
+
+            supersedes_report_version = (
+                self.final_report.report_version
+            )
+
+        elif revision_response is not None and revision_response.strip():
+            raise TransitionRejected(
+                "Initial FinalReport cannot carry a revision response "
+                "without a prior HUMAN review."
+            )
+
+        report = FinalReport(
+            report_version=len(self.final_reports) + 1,
+            session_id=self.session_id,
+            vf_version_id=selected.version_id,
+            vf_version_label=selected.version_label,
+            vf_content_hash=selected.content_hash,
+            vf_content=selected.content,
+            version_path=version_path,
+            choice_reason=declaration.choice_reason,
+            relation_to_initial_direction=(
+                declaration.relation_to_initial_direction
+            ),
+            decisive_human_contribution=(
+                declaration.decisive_human_contribution
+            ),
+            integrated_builder_elements=(
+                declaration.integrated_builder_elements
+            ),
+            decisive_critics=declaration.decisive_critics,
+            rejected_critics=declaration.rejected_critics,
+            memory_basis=declaration.memory_basis,
+            memory_effect_evidence=memory_effect_evidence,
+            verifications_performed=(
+                declaration.verifications_performed
+            ),
+            remaining_risks_and_uncertainties=(
+                declaration.remaining_risks_and_uncertainties
+            ),
+            preserved_contradictions=(
+                declaration.preserved_contradictions
+            ),
+            intended_use=declaration.intended_use,
+            decision_assumption=declaration.decision_assumption,
+            declaration_persisted=integrity.declaration_persisted,
+            actor_persisted=integrity.actor_persisted,
+            moment_persisted=integrity.moment_persisted,
+            provenance_persisted=integrity.provenance_persisted,
+            selected_version_bound=integrity.selected_version_bound,
+            no_unresolved_technical_error=(
+                integrity.no_unresolved_technical_error
+            ),
+            integrity_reasons=integrity.reason,
+            supersedes_report_version=supersedes_report_version,
+            human_review_basis_outcome=(
+                review_basis.outcome
+                if review_basis is not None
+                else None
+            ),
+            human_review_basis_note=(
+                review_basis.review_note
+                if review_basis is not None
+                else None
+            ),
+            revision_response=normalized_revision_response,
+            human_declaration_revision=(
+                self.vf_human_declaration_revision
+            ),
+            integrity_checked_revision=integrity.checked_revision,
+            generated_revision=self.revision,
+        )
+
+        self.final_reports.append(report)
+        self.final_report = report
+        self.final_report_revision = self.revision
+
+        return report
+
+    def _final_report_review_allows_regeneration(
+        self,
+        source: S,
+        target: S,
+    ) -> bool:
+        if not (
+            source is S.FINAL_REPORT_READY
+            and target is S.FINAL_REPORT_GENERATION
+        ):
+            return True
+
+        review = self.final_report_review
+        report = self.final_report
+
+        if (
+            review is None
+            or report is None
+            or self.final_report_review_revision != self.revision
+        ):
+            return False
+
+        return (
+            review.report_version == report.report_version
+            and review.report_generated_revision
+            == report.generated_revision
+            and review.reviewed_revision == self.revision
+            and review.outcome in {
+                "CORRECTED",
+                "CONTESTED",
+            }
+        )
+
+    def _final_report_review_allows_archive(
+        self,
+        source: S,
+        target: S,
+    ) -> bool:
+        if not (
+            source is S.FINAL_REPORT_READY
+            and target is S.SESSION_ARCHIVED
+        ):
+            return True
+
+        review = self.final_report_review
+        report = self.final_report
+
+        if (
+            review is None
+            or report is None
+            or self.final_report_review_revision != self.revision
+        ):
+            return False
+
+        return (
+            review.report_version == report.report_version
+            and review.report_generated_revision == report.generated_revision
+            and review.reviewed_revision == self.revision
+            and review.outcome == "CONFIRMED"
+        )
+
+    def record_final_report_review(
+        self,
+        *,
+        outcome: str,
+        review_note: str,
+        actor: Actor,
+    ) -> FinalReportReview:
+        if self.state is not S.FINAL_REPORT_READY:
+            raise TransitionRejected(
+                "Final report review requires FINAL_REPORT_READY."
+            )
+
+        if actor is not Actor.HUMAN:
+            raise TransitionRejected(
+                "Final report review requires HUMAN actor."
+            )
+
+        report = self.final_report
+
+        if report is None:
+            raise TransitionRejected(
+                "Final report review requires an existing FinalReport."
+            )
+
+        if self.final_report_review_revision == self.revision:
+            raise TransitionRejected(
+                "Final report review is already recorded for this revision."
+            )
+
+        normalized_outcome = outcome.strip().upper()
+
+        if normalized_outcome not in {
+            "CONFIRMED",
+            "CORRECTED",
+            "CONTESTED",
+        }:
+            raise TransitionRejected(
+                "Final report review outcome must be "
+                "CONFIRMED, CORRECTED, or CONTESTED."
+            )
+
+        normalized_note = review_note.strip()
+
+        if not normalized_note:
+            raise TransitionRejected(
+                "Final report review requires a non-empty HUMAN review note."
+            )
+
+        review = FinalReportReview(
+            report_version=report.report_version,
+            outcome=normalized_outcome,
+            review_note=normalized_note,
+            report_generated_revision=report.generated_revision,
+            reviewed_revision=self.revision,
+        )
+
+        self.final_report_reviews.append(review)
+        self.final_report_review = review
+        self.final_report_review_revision = self.revision
+
+        return review
 
     def _vf_selected_result_allows_locked(
         self,
@@ -475,6 +931,24 @@ class SystemOrchestrator:
             return False
 
         if not self._vf_precheck_transition_allowed(
+            self.state,
+            target,
+        ):
+            return False
+
+        if not self._final_report_allows_ready(
+            self.state,
+            target,
+        ):
+            return False
+
+        if not self._final_report_review_allows_archive(
+            self.state,
+            target,
+        ):
+            return False
+
+        if not self._final_report_review_allows_regeneration(
             self.state,
             target,
         ):
@@ -1167,6 +1641,33 @@ class SystemOrchestrator:
             )
             vf_lock_content_hash = (
                 declaration.selected_version_content_hash
+            )
+
+        if not self._final_report_allows_ready(
+            source,
+            target,
+        ):
+            raise TransitionRejected(
+                "FINAL_REPORT_READY requires a valid report bound "
+                "to the exact locked VF for the current revision."
+            )
+
+        if not self._final_report_review_allows_archive(
+            source,
+            target,
+        ):
+            raise TransitionRejected(
+                "SESSION_ARCHIVED requires a current HUMAN-confirmed "
+                "FinalReport review."
+            )
+
+        if not self._final_report_review_allows_regeneration(
+            source,
+            target,
+        ):
+            raise TransitionRejected(
+                "FINAL_REPORT_GENERATION retry requires a current HUMAN "
+                "CORRECTED or CONTESTED FinalReport review."
             )
 
         self.revision += 1

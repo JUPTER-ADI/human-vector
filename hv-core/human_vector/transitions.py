@@ -235,6 +235,7 @@ ALLOWED_TRANSITIONS = {
         S.TECHNICAL_ERROR,
     }),
     S.FINAL_REPORT_READY: frozenset({
+        S.FINAL_REPORT_GENERATION,
         S.SESSION_ARCHIVED,
     }),
     S.SESSION_ARCHIVED: frozenset(),
