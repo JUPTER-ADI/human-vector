@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from enum import Enum
 
@@ -334,6 +334,23 @@ class TransitionRecord:
     occurred_at: str
 
 
+@dataclass(frozen=True)
+class HumanCognitiveResponse:
+    response_id: str
+    session_id: str
+    source_version_id: str
+    source_version_label: str
+    source_content_hash: str
+    observation: str
+    contradiction: str
+    own_idea: str
+    risks: str
+    critic_questions: str
+    status: str
+    created_revision: int
+    confirmed_revision: int | None = None
+
+
 @dataclass
 class SystemOrchestrator:
     state: S = S.SESSION_CREATED
@@ -341,6 +358,8 @@ class SystemOrchestrator:
     history: list[TransitionRecord] = field(default_factory=list)
     session_id: str | None = None
     result_versions: dict[str, ResultVersion] = field(default_factory=dict)
+    human_response_artifact: HumanCognitiveResponse | None = None
+    human_response_history: list[HumanCognitiveResponse] = field(default_factory=list)
     vf_locked_version_id: str | None = None
     vf_locked_content_hash: str | None = None
     retrieval_outcome: str | None = None
@@ -366,6 +385,195 @@ class SystemOrchestrator:
     final_report_reviews: list[FinalReportReview] = field(default_factory=list)
     final_report_review: FinalReportReview | None = None
     final_report_review_revision: int | None = None
+
+    def _resolve_v1_for_human_response(self) -> ResultVersion:
+        versions = [
+            version
+            for version in self.result_versions.values()
+            if version.version_label == "V1"
+        ]
+
+        if len(versions) != 1:
+            raise TransitionRejected(
+                "HUMAN cognitive response requires exactly one recorded V1."
+            )
+
+        version = versions[0]
+
+        if (
+            self.session_id is None
+            or version.session_id != self.session_id
+        ):
+            raise TransitionRejected(
+                "HUMAN cognitive response V1 must belong to the current session."
+            )
+
+        return version
+
+    def record_human_response_draft(
+        self,
+        *,
+        observation: str,
+        contradiction: str,
+        own_idea: str,
+        risks: str = "",
+        critic_questions: str = "",
+        actor: Actor,
+    ) -> HumanCognitiveResponse:
+        from uuid import uuid4
+
+        if actor is not Actor.HUMAN:
+            raise TransitionRejected(
+                "HUMAN cognitive response requires HUMAN actor."
+            )
+
+        if self.state not in {
+            S.HUMAN_RESPONSE_REQUIRED,
+            S.HUMAN_RESPONSE_DRAFT,
+            S.HUMAN_RESPONSE_CONFIRMATION_REQUIRED,
+        }:
+            raise TransitionRejected(
+                "HUMAN cognitive response draft is not allowed "
+                f"from {self.state.value}."
+            )
+
+        current = self.human_response_artifact
+        if current is not None and current.status == "CONFIRMED":
+            raise TransitionRejected(
+                "Confirmed HUMAN cognitive response is locked."
+            )
+
+        required = {
+            "observation": observation,
+            "contradiction": contradiction,
+            "own_idea": own_idea,
+        }
+
+        missing = [
+            name
+            for name, value in required.items()
+            if not isinstance(value, str) or not value.strip()
+        ]
+
+        if missing:
+            raise TransitionRejected(
+                "HUMAN cognitive response missing required fields: "
+                + ", ".join(sorted(missing))
+            )
+
+        if not isinstance(risks, str):
+            raise TransitionRejected(
+                "HUMAN cognitive response risks must be text."
+            )
+
+        if not isinstance(critic_questions, str):
+            raise TransitionRejected(
+                "HUMAN cognitive response critic_questions must be text."
+            )
+
+        source_v1 = self._resolve_v1_for_human_response()
+
+        if self.state is S.HUMAN_RESPONSE_CONFIRMATION_REQUIRED:
+            self.transition(
+                S.HUMAN_RESPONSE_DRAFT,
+                Actor.HUMAN,
+                "HUMAN returned cognitive response for revision.",
+            )
+
+        if self.state is S.HUMAN_RESPONSE_REQUIRED:
+            self.transition(
+                S.HUMAN_RESPONSE_DRAFT,
+                Actor.HUMAN,
+                "HUMAN began independent cognitive response to V1.",
+            )
+
+        response = HumanCognitiveResponse(
+            response_id=str(uuid4()),
+            session_id=source_v1.session_id,
+            source_version_id=source_v1.version_id,
+            source_version_label=source_v1.version_label,
+            source_content_hash=source_v1.content_hash,
+            observation=observation,
+            contradiction=contradiction,
+            own_idea=own_idea,
+            risks=risks,
+            critic_questions=critic_questions,
+            status="DRAFT",
+            created_revision=self.revision,
+        )
+
+        self.human_response_artifact = response
+        self.human_response_history.append(response)
+        return response
+
+    def request_human_response_confirmation(
+        self,
+        *,
+        actor: Actor,
+    ) -> HumanCognitiveResponse:
+        if actor is not Actor.HUMAN:
+            raise TransitionRejected(
+                "HUMAN response confirmation request requires HUMAN actor."
+            )
+
+        if self.state is not S.HUMAN_RESPONSE_DRAFT:
+            raise TransitionRejected(
+                "HUMAN response confirmation requires HUMAN_RESPONSE_DRAFT."
+            )
+
+        response = self.human_response_artifact
+
+        if response is None or response.status != "DRAFT":
+            raise TransitionRejected(
+                "HUMAN response confirmation requires a current draft."
+            )
+
+        self.transition(
+            S.HUMAN_RESPONSE_CONFIRMATION_REQUIRED,
+            Actor.HUMAN,
+            "HUMAN submitted cognitive response for explicit confirmation.",
+        )
+
+        return response
+
+    def confirm_human_response(
+        self,
+        *,
+        actor: Actor,
+    ) -> HumanCognitiveResponse:
+        if actor is not Actor.HUMAN:
+            raise TransitionRejected(
+                "HUMAN response capture requires HUMAN actor."
+            )
+
+        if self.state is not S.HUMAN_RESPONSE_CONFIRMATION_REQUIRED:
+            raise TransitionRejected(
+                "HUMAN response capture requires "
+                "HUMAN_RESPONSE_CONFIRMATION_REQUIRED."
+            )
+
+        response = self.human_response_artifact
+
+        if response is None or response.status != "DRAFT":
+            raise TransitionRejected(
+                "HUMAN response capture requires a current draft."
+            )
+
+        self.transition(
+            S.HUMAN_RESPONSE_CAPTURED,
+            Actor.HUMAN,
+            "HUMAN explicitly confirmed cognitive response to V1.",
+        )
+
+        confirmed = replace(
+            response,
+            status="CONFIRMED",
+            confirmed_revision=self.revision,
+        )
+
+        self.human_response_artifact = confirmed
+        self.human_response_history.append(confirmed)
+        return confirmed
 
     def _vf_final_integrity_allows_locking(
         self,
