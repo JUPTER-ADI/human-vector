@@ -1,3 +1,5 @@
+from uuid import UUID, uuid4
+from google.adk.tools import ToolContext
 from human_vector.orchestrator import Actor, SystemOrchestrator, TransitionRejected
 from human_vector.states import HumanVectorState as S
 
@@ -151,5 +153,117 @@ def advance_to_builder_v1_running() -> dict:
         "history_length": len(_orchestrator.history),
         "actor": _orchestrator.history[-1].actor.value,
         "builder_ai_required": True,
+        "final_authority": "HUMAN",
+    }
+
+def record_builder_v1(v1_content: str, tool_context: ToolContext) -> dict:
+    """Record the exact V1 produced by Builder AI and stop at the HUMAN response gate.
+
+    Args:
+        v1_content: The exact Builder AI V1 content. It must not be rewritten
+            or summarized by the orchestrator before being recorded.
+    """
+    content = v1_content.strip()
+
+    if _orchestrator.state is not S.BUILDER_V1_RUNNING:
+        return {
+            "ok": False,
+            "state": _orchestrator.state.value,
+            "reason": (
+                "Builder V1 can only be recorded from "
+                "BUILDER_V1_RUNNING."
+            ),
+            "final_authority": "HUMAN",
+        }
+
+    if not content:
+        return {
+            "ok": False,
+            "state": _orchestrator.state.value,
+            "reason": "Builder V1 content must be non-empty.",
+            "final_authority": "HUMAN",
+        }
+
+    if any(
+        version.version_label == "V1"
+        for version in _orchestrator.result_versions.values()
+    ):
+        return {
+            "ok": False,
+            "state": _orchestrator.state.value,
+            "reason": "V1 already exists for this core session.",
+            "final_authority": "HUMAN",
+        }
+
+    core_session_id = tool_context.state.get("hv_core_session_id")
+    if not core_session_id:
+        core_session_id = str(uuid4())
+        tool_context.state["hv_core_session_id"] = core_session_id
+
+    try:
+        core_session_id = str(UUID(str(core_session_id).strip()))
+    except ValueError:
+        return {
+            "ok": False,
+            "state": _orchestrator.state.value,
+            "reason": "Builder V1 requires a valid session UUID.",
+            "final_authority": "HUMAN",
+        }
+
+    tool_context.state["hv_core_session_id"] = core_session_id
+
+    if (
+        _orchestrator.session_id is not None
+        and _orchestrator.session_id != core_session_id
+    ):
+        return {
+            "ok": False,
+            "state": _orchestrator.state.value,
+            "reason": (
+                "ADK session/core session mismatch. "
+                "The current in-memory bridge is already bound "
+                "to another HUMAN VECTOR session."
+            ),
+            "final_authority": "HUMAN",
+        }
+
+    try:
+        _orchestrator.transition(
+            S.V1_GENERATED,
+            Actor.BUILDER_AI,
+            "Builder AI generated V1.",
+        )
+
+        result = _orchestrator.record_result_version(
+            session_id=core_session_id,
+            version_label="V1",
+            content=v1_content,
+            actor=Actor.BUILDER_AI,
+        )
+
+        _orchestrator.transition(
+            S.HUMAN_RESPONSE_REQUIRED,
+            Actor.ORCHESTRATOR,
+            "V1 recorded; HUMAN cognitive response is required.",
+        )
+
+    except TransitionRejected as exc:
+        return {
+            "ok": False,
+            "state": _orchestrator.state.value,
+            "reason": str(exc),
+            "final_authority": "HUMAN",
+        }
+
+    return {
+        "ok": True,
+        "state": _orchestrator.state.value,
+        "revision": _orchestrator.revision,
+        "session_id": result.session_id,
+        "version_id": result.version_id,
+        "version_label": result.version_label,
+        "content_hash": result.content_hash,
+        "builder_actor": Actor.BUILDER_AI.value,
+        "human_response_required": True,
         "final_authority": "HUMAN",
     }
