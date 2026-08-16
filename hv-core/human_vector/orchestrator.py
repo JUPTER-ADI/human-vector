@@ -93,10 +93,6 @@ HUMAN_AUTHORITY_TRANSITIONS = frozenset({
         S.MEMORY_SELECTION_CONFIRMATION_REQUIRED,
         S.MEMORY_REVIEW_REQUIRED,
     ),
-    (
-        S.MEMORY_SELECTION_CONFIRMATION_REQUIRED,
-        S.MEMORY_SELECTION_LOCKED,
-    ),
 
     (
         S.RECONSTRUCTION_PACKAGE_CONFIRMATION_REQUIRED,
@@ -139,6 +135,7 @@ AGENT_OWNED_TRANSITIONS = {
     (S.MEMORY_RETRIEVAL_READY, S.MEMORY_RETRIEVAL_RUNNING): Actor.ORCHESTRATOR,
     (S.MEMORY_RETRIEVAL_RUNNING, S.MEMORY_REVIEW_REQUIRED): Actor.MEMORY,
     (S.MEMORY_RETRIEVAL_RUNNING, S.MEMORY_RETRIEVAL_FAILED): Actor.MEMORY,
+    (S.MEMORY_SELECTION_CONFIRMATION_REQUIRED, S.MEMORY_SELECTION_LOCKED): Actor.SYSTEM,
     (S.MEMORY_SELECTION_LOCKED, S.RECONSTRUCTION_PACKAGE_PREPARATION): Actor.ORCHESTRATOR,
     (S.NO_RELEVANT_MEMORY, S.RECONSTRUCTION_PACKAGE_PREPARATION): Actor.ORCHESTRATOR,
     (S.RECONSTRUCTION_PACKAGE_PREPARATION, S.RECONSTRUCTION_PACKAGE_CONFIRMATION_REQUIRED): Actor.ORCHESTRATOR,
@@ -264,6 +261,231 @@ class VFHumanDeclaration:
     intended_use: str
     decision_assumption: str
     declared_revision: int
+
+
+
+from dataclasses import replace as _hv_mem_replace
+from datetime import datetime as _hv_mem_datetime, timezone as _hv_mem_timezone
+from uuid import uuid4 as _hv_mem_uuid4
+
+
+def _hv_memory_now() -> str:
+    return _hv_mem_datetime.now(_hv_mem_timezone.utc).isoformat()
+
+
+def _hv_memory_hash(payload: dict) -> str:
+    import hashlib
+    import json
+
+    raw = json.dumps(
+        payload,
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+@dataclass(frozen=True)
+class MemoryCandidate:
+    candidate_id: str
+    source_id: str
+    source_type: str
+    source_actor: str
+    source_session_id: str
+    original_content: str
+    provenance: str
+    retrieval_reason: str
+    relevance_score: float | None
+    warnings: tuple[str, ...]
+    retrieved_at: str
+    content_hash: str
+
+
+@dataclass(frozen=True)
+class MemoryRetrievalArtifact:
+    retrieval_id: str
+    session_id: str
+    manual_transfer_package_id: str
+    query_basis: str
+    candidates: tuple[MemoryCandidate, ...]
+    retrieval_outcome: str
+    actor: str
+    created_at: str
+    content_hash: str
+
+
+@dataclass(frozen=True)
+class MemorySelectionItem:
+    selection_item_id: str
+    candidate_id: str
+    decision: str
+    accepted_fragment: str
+    human_transformed_content: str
+    reason: str
+    conditions: str
+    destination: str
+    authorized_effect: str
+    status: str
+    content_hash: str
+
+
+@dataclass(frozen=True)
+class MemorySelection:
+    selection_id: str
+    session_id: str
+    retrieval_id: str
+    items: tuple[MemorySelectionItem, ...]
+    status: str
+    confirmed_by: str
+    confirmed_at: str
+    confirmed_content_hash: str
+    confirmation_note: str
+    locked_by: str
+    locked_at: str
+    content_hash: str
+    created_at: str
+
+
+@dataclass(frozen=True)
+class MemoryTransferItem:
+    transfer_item_id: str
+    selection_item_id: str
+    candidate_id: str
+    source_id: str
+    source_actor: str
+    original_content: str
+    selected_fragment: str
+    human_transformed_content: str
+    reason: str
+    conditions: str
+    destination: str
+    authorized_effect: str
+    provenance: str
+    content_hash: str
+
+
+@dataclass(frozen=True)
+class MemoryTransferPackage:
+    package_id: str
+    session_id: str
+    retrieval_id: str
+    selection_id: str
+    package_type: str
+    items: tuple[MemoryTransferItem, ...]
+    status: str
+    confirmed_by: str
+    confirmed_at: str
+    confirmed_content_hash: str
+    confirmation_note: str
+    locked_by: str
+    locked_at: str
+    content_hash: str
+    created_at: str
+
+
+def _hv_memory_candidate_hash(item: MemoryCandidate) -> str:
+    return _hv_memory_hash({
+        "source_id": item.source_id,
+        "source_type": item.source_type,
+        "source_actor": item.source_actor,
+        "source_session_id": item.source_session_id,
+        "original_content": item.original_content,
+        "provenance": item.provenance,
+        "retrieval_reason": item.retrieval_reason,
+        "relevance_score": item.relevance_score,
+        "warnings": list(item.warnings),
+    })
+
+
+def _hv_memory_retrieval_hash(
+    artifact: MemoryRetrievalArtifact,
+) -> str:
+    return _hv_memory_hash({
+        "session_id": artifact.session_id,
+        "manual_transfer_package_id":
+            artifact.manual_transfer_package_id,
+        "query_basis": artifact.query_basis,
+        "retrieval_outcome": artifact.retrieval_outcome,
+        "actor": artifact.actor,
+        "candidates": [
+            {
+                "candidate_id": item.candidate_id,
+                "content_hash": item.content_hash,
+            }
+            for item in artifact.candidates
+        ],
+    })
+
+
+def _hv_memory_selection_item_hash(
+    item: MemorySelectionItem,
+) -> str:
+    return _hv_memory_hash({
+        "candidate_id": item.candidate_id,
+        "decision": item.decision,
+        "accepted_fragment": item.accepted_fragment,
+        "human_transformed_content":
+            item.human_transformed_content,
+        "reason": item.reason,
+        "conditions": item.conditions,
+        "destination": item.destination,
+        "authorized_effect": item.authorized_effect,
+    })
+
+
+def _hv_memory_selection_hash(
+    artifact: MemorySelection,
+) -> str:
+    return _hv_memory_hash({
+        "session_id": artifact.session_id,
+        "retrieval_id": artifact.retrieval_id,
+        "items": [
+            {
+                "selection_item_id": item.selection_item_id,
+                "content_hash": item.content_hash,
+            }
+            for item in artifact.items
+        ],
+    })
+
+
+def _hv_memory_transfer_item_hash(
+    item: MemoryTransferItem,
+) -> str:
+    return _hv_memory_hash({
+        "selection_item_id": item.selection_item_id,
+        "candidate_id": item.candidate_id,
+        "source_id": item.source_id,
+        "source_actor": item.source_actor,
+        "original_content": item.original_content,
+        "selected_fragment": item.selected_fragment,
+        "human_transformed_content":
+            item.human_transformed_content,
+        "reason": item.reason,
+        "conditions": item.conditions,
+        "destination": item.destination,
+        "authorized_effect": item.authorized_effect,
+        "provenance": item.provenance,
+    })
+
+
+def _hv_memory_transfer_hash(
+    artifact: MemoryTransferPackage,
+) -> str:
+    return _hv_memory_hash({
+        "session_id": artifact.session_id,
+        "retrieval_id": artifact.retrieval_id,
+        "selection_id": artifact.selection_id,
+        "package_type": artifact.package_type,
+        "items": [
+            {
+                "transfer_item_id": item.transfer_item_id,
+                "content_hash": item.content_hash,
+            }
+            for item in artifact.items
+        ],
+    })
 
 
 @dataclass(frozen=True)
@@ -716,6 +938,27 @@ class SystemOrchestrator:
 
     vf_locked_version_id: str | None = None
     vf_locked_content_hash: str | None = None
+    memory_retrieval_artifact: MemoryRetrievalArtifact | None = None
+    memory_retrieval_history: list[MemoryRetrievalArtifact] = field(
+        default_factory=list
+    )
+    memory_selection_artifact: MemorySelection | None = None
+    memory_selection_history: list[MemorySelection] = field(
+        default_factory=list
+    )
+    memory_transfer_artifact: MemoryTransferPackage | None = None
+    memory_transfer_history: list[MemoryTransferPackage] = field(
+        default_factory=list
+    )
+    memory_negative_human_reason: str | None = None
+    _memory_selection_lock_authorization_hash: str | None = field(
+        default=None,
+        repr=False,
+    )
+    _memory_negative_resolution_authorized: bool = field(
+        default=False,
+        repr=False,
+    )
     retrieval_outcome: str | None = None
     outcome_reason: str = ""
     memory_resolution_outcome: str | None = None
@@ -3364,6 +3607,907 @@ class SystemOrchestrator:
             )
         )
 
+
+    @staticmethod
+    def _memory_active_decisions() -> set[str]:
+        return {
+            "ACTIVATE",
+            "ACTIVATE_PARTIAL",
+            "ACTIVATE_CONDITIONAL",
+        }
+
+    def _memory_candidate_map(self) -> dict[str, MemoryCandidate]:
+        artifact = self.memory_retrieval_artifact
+        if artifact is None:
+            return {}
+        return {
+            candidate.candidate_id: candidate
+            for candidate in artifact.candidates
+        }
+
+    def _validate_memory_retrieval_integrity(
+        self,
+        artifact: MemoryRetrievalArtifact,
+    ) -> None:
+        if not artifact.candidates:
+            raise TransitionRejected(
+                "Positive memory retrieval must contain candidates."
+            )
+
+        for candidate in artifact.candidates:
+            if candidate.content_hash != _hv_memory_candidate_hash(candidate):
+                raise TransitionRejected(
+                    "Memory candidate integrity check failed."
+                )
+
+        if artifact.content_hash != _hv_memory_retrieval_hash(artifact):
+            raise TransitionRejected(
+                "Memory retrieval artifact integrity check failed."
+            )
+
+    def _validate_memory_selection_integrity(
+        self,
+        artifact: MemorySelection,
+    ) -> None:
+        if not artifact.items:
+            raise TransitionRejected(
+                "Memory Selection cannot be empty."
+            )
+
+        for item in artifact.items:
+            if (
+                item.content_hash
+                != _hv_memory_selection_item_hash(item)
+            ):
+                raise TransitionRejected(
+                    "Memory Selection item integrity check failed."
+                )
+
+        if artifact.content_hash != _hv_memory_selection_hash(artifact):
+            raise TransitionRejected(
+                "Memory Selection integrity check failed."
+            )
+
+    def _validate_memory_transfer_integrity(
+        self,
+        artifact: MemoryTransferPackage,
+    ) -> None:
+        if not artifact.items:
+            raise TransitionRejected(
+                "MEMORY_TRANSFER package cannot be empty."
+            )
+
+        for item in artifact.items:
+            if (
+                item.content_hash
+                != _hv_memory_transfer_item_hash(item)
+            ):
+                raise TransitionRejected(
+                    "Memory Transfer item integrity check failed."
+                )
+
+        if artifact.content_hash != _hv_memory_transfer_hash(artifact):
+            raise TransitionRejected(
+                "MEMORY_TRANSFER package integrity check failed."
+            )
+
+    def record_memory_candidates(
+        self,
+        *,
+        actor: Actor,
+        query_basis: str,
+        candidates: list[dict],
+    ) -> MemoryRetrievalArtifact:
+        if actor is not Actor.MEMORY:
+            raise TransitionRejected(
+                "Only Active Agentic Memory can record retrieval candidates."
+            )
+
+        if self.state is not S.MEMORY_RETRIEVAL_RUNNING:
+            raise TransitionRejected(
+                "Memory candidates can be recorded only while "
+                "MEMORY_RETRIEVAL_RUNNING is active."
+            )
+
+        manual_transfer = self.manual_transfer_artifact
+        if (
+            manual_transfer is None
+            or manual_transfer.status != "LOCKED"
+            or manual_transfer.confirmed_by != Actor.HUMAN.value
+            or manual_transfer.locked_by != Actor.SYSTEM.value
+        ):
+            raise TransitionRejected(
+                "Memory retrieval requires the locked preliminary "
+                "Manual Transfer package."
+            )
+
+        if not isinstance(query_basis, str) or not query_basis.strip():
+            raise TransitionRejected(
+                "Memory retrieval query basis is required."
+            )
+
+        if not isinstance(candidates, list) or not candidates:
+            raise TransitionRejected(
+                "record_memory_candidates requires at least one candidate. "
+                "Use the negative retrieval outcome for zero candidates."
+            )
+
+        built: list[MemoryCandidate] = []
+        duplicates: set[tuple[str, str]] = set()
+
+        for index, raw in enumerate(candidates, start=1):
+            if not isinstance(raw, dict):
+                raise TransitionRejected(
+                    f"Memory candidate {index} must be a mapping."
+                )
+
+            def required(name: str) -> str:
+                value = raw.get(name, "")
+                if not isinstance(value, str) or not value.strip():
+                    raise TransitionRejected(
+                        f"Memory candidate {index}: {name} is required."
+                    )
+                return value.strip()
+
+            source_id = required("source_id")
+            source_type = required("source_type")
+            source_actor = required("source_actor")
+            source_session_id = required("source_session_id")
+            original_content = required("original_content")
+            provenance = required("provenance")
+            retrieval_reason = required("retrieval_reason")
+
+            score = raw.get("relevance_score")
+            if score is not None:
+                if not isinstance(score, (int, float)):
+                    raise TransitionRejected(
+                        f"Memory candidate {index}: relevance_score "
+                        "must be numeric."
+                    )
+                score = float(score)
+                if score < 0.0 or score > 1.0:
+                    raise TransitionRejected(
+                        f"Memory candidate {index}: relevance_score "
+                        "must be between 0 and 1."
+                    )
+
+            warnings_raw = raw.get("warnings", [])
+            if not isinstance(warnings_raw, list):
+                raise TransitionRejected(
+                    f"Memory candidate {index}: warnings must be a list."
+                )
+
+            warnings = []
+            for warning in warnings_raw:
+                if not isinstance(warning, str) or not warning.strip():
+                    raise TransitionRejected(
+                        f"Memory candidate {index}: invalid warning."
+                    )
+                warnings.append(warning.strip())
+
+            duplicate_key = (source_id, original_content)
+            if duplicate_key in duplicates:
+                raise TransitionRejected(
+                    f"Duplicate memory candidate at position {index}."
+                )
+            duplicates.add(duplicate_key)
+
+            candidate = MemoryCandidate(
+                candidate_id=str(_hv_mem_uuid4()),
+                source_id=source_id,
+                source_type=source_type,
+                source_actor=source_actor,
+                source_session_id=source_session_id,
+                original_content=original_content,
+                provenance=provenance,
+                retrieval_reason=retrieval_reason,
+                relevance_score=score,
+                warnings=tuple(warnings),
+                retrieved_at=_hv_memory_now(),
+                content_hash="",
+            )
+
+            candidate = _hv_mem_replace(
+                candidate,
+                content_hash=_hv_memory_candidate_hash(candidate),
+            )
+            built.append(candidate)
+
+        artifact = MemoryRetrievalArtifact(
+            retrieval_id=str(_hv_mem_uuid4()),
+            session_id=str(self.session_id or ""),
+            manual_transfer_package_id=manual_transfer.package_id,
+            query_basis=query_basis.strip(),
+            candidates=tuple(built),
+            retrieval_outcome=RETRIEVAL_CANDIDATES_FOUND,
+            actor=Actor.MEMORY.value,
+            created_at=_hv_memory_now(),
+            content_hash="",
+        )
+
+        artifact = _hv_mem_replace(
+            artifact,
+            content_hash=_hv_memory_retrieval_hash(artifact),
+        )
+
+        old_outcome = self.retrieval_outcome
+        old_reason = getattr(self, "outcome_reason", None)
+
+        self.retrieval_outcome = RETRIEVAL_CANDIDATES_FOUND
+        self.outcome_reason = (
+            f"{len(built)} memory candidate(s) retrieved with provenance."
+        )
+
+        try:
+            self.transition(
+                S.MEMORY_REVIEW_REQUIRED,
+                actor,
+            )
+        except Exception:
+            self.retrieval_outcome = old_outcome
+            self.outcome_reason = old_reason
+            raise
+
+        self.memory_retrieval_artifact = artifact
+        self.memory_retrieval_history.append(artifact)
+        return artifact
+
+    def review_memory_candidates(
+        self,
+        *,
+        actor: Actor,
+        decisions: list[dict],
+    ) -> MemorySelection:
+        if actor is not Actor.HUMAN:
+            raise TransitionRejected(
+                "Only HUMAN can review and activate memory candidates."
+            )
+
+        if self.state is not S.MEMORY_REVIEW_REQUIRED:
+            raise TransitionRejected(
+                "Memory review is allowed only in MEMORY_REVIEW_REQUIRED."
+            )
+
+        retrieval = self.memory_retrieval_artifact
+        if retrieval is None:
+            raise TransitionRejected(
+                "No persisted memory retrieval artifact exists."
+            )
+
+        self._validate_memory_retrieval_integrity(retrieval)
+
+        if self.retrieval_outcome != RETRIEVAL_CANDIDATES_FOUND:
+            raise TransitionRejected(
+                "HUMAN memory review requires CANDIDATES_FOUND."
+            )
+
+        if not isinstance(decisions, list) or not decisions:
+            raise TransitionRejected(
+                "HUMAN must explicitly review every memory candidate."
+            )
+
+        candidate_map = self._memory_candidate_map()
+
+        decision_ids = []
+        for raw in decisions:
+            if not isinstance(raw, dict):
+                raise TransitionRejected(
+                    "Each HUMAN memory decision must be a mapping."
+                )
+            candidate_id = raw.get("candidate_id", "")
+            if not isinstance(candidate_id, str) or not candidate_id.strip():
+                raise TransitionRejected(
+                    "Every HUMAN memory decision requires candidate_id."
+                )
+            decision_ids.append(candidate_id.strip())
+
+        if len(set(decision_ids)) != len(decision_ids):
+            raise TransitionRejected(
+                "Duplicate HUMAN memory decisions are not allowed."
+            )
+
+        if set(decision_ids) != set(candidate_map):
+            raise TransitionRejected(
+                "HUMAN must explicitly review every retrieved candidate; "
+                "silence is not acceptance."
+            )
+
+        allowed = {
+            "ACTIVATE",
+            "ACTIVATE_PARTIAL",
+            "ACTIVATE_CONDITIONAL",
+            "REJECT",
+            "COMPARE_ONLY",
+            "IRRELEVANT",
+            "OUTDATED",
+            "KEEP_UNRESOLVED",
+        }
+
+        active = self._memory_active_decisions()
+        built: list[MemorySelectionItem] = []
+
+        for index, raw in enumerate(decisions, start=1):
+            candidate_id = raw["candidate_id"].strip()
+            candidate = candidate_map[candidate_id]
+
+            decision = raw.get("decision", "")
+            reason = raw.get("reason", "")
+
+            if not isinstance(decision, str):
+                raise TransitionRejected(
+                    f"Memory decision {index}: decision must be text."
+                )
+            if not isinstance(reason, str) or not reason.strip():
+                raise TransitionRejected(
+                    f"Memory decision {index}: reason is required."
+                )
+
+            decision = decision.strip().upper()
+            reason = reason.strip()
+
+            if decision not in allowed:
+                raise TransitionRejected(
+                    f"Unsupported HUMAN memory decision: {decision!r}."
+                )
+
+            accepted_fragment = raw.get("accepted_fragment", "")
+            human_transformed_content = raw.get(
+                "human_transformed_content",
+                "",
+            )
+            conditions = raw.get("conditions", "")
+            destination = raw.get("destination", "")
+            authorized_effect = raw.get("authorized_effect", "")
+
+            for name, value in (
+                ("accepted_fragment", accepted_fragment),
+                ("human_transformed_content", human_transformed_content),
+                ("conditions", conditions),
+                ("destination", destination),
+                ("authorized_effect", authorized_effect),
+            ):
+                if not isinstance(value, str):
+                    raise TransitionRejected(
+                        f"Memory decision {index}: {name} must be text."
+                    )
+
+            accepted_fragment = accepted_fragment.strip()
+            human_transformed_content = human_transformed_content.strip()
+            conditions = conditions.strip()
+            destination = destination.strip()
+            authorized_effect = authorized_effect.strip()
+
+            if decision in active:
+                if not accepted_fragment:
+                    raise TransitionRejected(
+                        f"Memory decision {index}: active memory requires "
+                        "an explicit accepted_fragment."
+                    )
+                if accepted_fragment not in candidate.original_content:
+                    raise TransitionRejected(
+                        f"Memory decision {index}: accepted fragment "
+                        "does not match the retrieved candidate."
+                    )
+                if not destination:
+                    raise TransitionRejected(
+                        f"Memory decision {index}: destination is required."
+                    )
+                if not authorized_effect:
+                    raise TransitionRejected(
+                        f"Memory decision {index}: authorized_effect "
+                        "is required."
+                    )
+                if (
+                    decision == "ACTIVATE_CONDITIONAL"
+                    and not conditions
+                ):
+                    raise TransitionRejected(
+                        f"Memory decision {index}: conditional activation "
+                        "requires conditions."
+                    )
+
+            item = MemorySelectionItem(
+                selection_item_id=str(_hv_mem_uuid4()),
+                candidate_id=candidate_id,
+                decision=decision,
+                accepted_fragment=accepted_fragment,
+                human_transformed_content=human_transformed_content,
+                reason=reason,
+                conditions=conditions,
+                destination=destination,
+                authorized_effect=authorized_effect,
+                status="HUMAN_REVIEWED",
+                content_hash="",
+            )
+
+            item = _hv_mem_replace(
+                item,
+                content_hash=_hv_memory_selection_item_hash(item),
+            )
+            built.append(item)
+
+        selection = MemorySelection(
+            selection_id=str(_hv_mem_uuid4()),
+            session_id=str(self.session_id or ""),
+            retrieval_id=retrieval.retrieval_id,
+            items=tuple(built),
+            status="DRAFT",
+            confirmed_by="",
+            confirmed_at="",
+            confirmed_content_hash="",
+            confirmation_note="",
+            locked_by="",
+            locked_at="",
+            content_hash="",
+            created_at=_hv_memory_now(),
+        )
+
+        selection = _hv_mem_replace(
+            selection,
+            content_hash=_hv_memory_selection_hash(selection),
+        )
+
+        active_count = sum(
+            1 for item in built if item.decision in active
+        )
+
+        if active_count > 0:
+            self.transition(
+                S.MEMORY_SELECTION_CONFIRMATION_REQUIRED,
+                actor,
+            )
+
+        self.memory_selection_artifact = selection
+        self.memory_selection_history.append(selection)
+        return selection
+
+    def build_memory_transfer_package(
+        self,
+        *,
+        actor: Actor,
+        transfers: list[dict],
+    ) -> MemoryTransferPackage:
+        if actor is not Actor.HUMAN:
+            raise TransitionRejected(
+                "Only HUMAN can construct the MEMORY_TRANSFER package."
+            )
+
+        if self.state is not S.MEMORY_SELECTION_CONFIRMATION_REQUIRED:
+            raise TransitionRejected(
+                "MEMORY_TRANSFER can be constructed only in "
+                "MEMORY_SELECTION_CONFIRMATION_REQUIRED."
+            )
+
+        selection = self.memory_selection_artifact
+        retrieval = self.memory_retrieval_artifact
+
+        if selection is None or retrieval is None:
+            raise TransitionRejected(
+                "Memory Selection and retrieval artifacts are required."
+            )
+
+        self._validate_memory_selection_integrity(selection)
+        self._validate_memory_retrieval_integrity(retrieval)
+
+        active = self._memory_active_decisions()
+        active_items = {
+            item.selection_item_id: item
+            for item in selection.items
+            if item.decision in active
+        }
+
+        if not active_items:
+            raise TransitionRejected(
+                "MEMORY_TRANSFER requires at least one HUMAN-activated item."
+            )
+
+        if not isinstance(transfers, list) or not transfers:
+            raise TransitionRejected(
+                "HUMAN must manually authorize each active memory transfer."
+            )
+
+        supplied_ids = []
+        for raw in transfers:
+            if not isinstance(raw, dict):
+                raise TransitionRejected(
+                    "Every MEMORY_TRANSFER item must be a mapping."
+                )
+            selection_item_id = raw.get("selection_item_id", "")
+            if (
+                not isinstance(selection_item_id, str)
+                or not selection_item_id.strip()
+            ):
+                raise TransitionRejected(
+                    "Every MEMORY_TRANSFER item requires selection_item_id."
+                )
+            supplied_ids.append(selection_item_id.strip())
+
+        if len(set(supplied_ids)) != len(supplied_ids):
+            raise TransitionRejected(
+                "Duplicate MEMORY_TRANSFER items are not allowed."
+            )
+
+        if set(supplied_ids) != set(active_items):
+            raise TransitionRejected(
+                "Every HUMAN-activated memory item must be transferred "
+                "explicitly; silence is not transfer authorization."
+            )
+
+        candidate_map = self._memory_candidate_map()
+        built: list[MemoryTransferItem] = []
+
+        for index, raw in enumerate(transfers, start=1):
+            selection_item_id = raw["selection_item_id"].strip()
+            selected = active_items[selection_item_id]
+            candidate = candidate_map[selected.candidate_id]
+
+            selected_fragment = raw.get("selected_fragment", "")
+            human_transformed_content = raw.get(
+                "human_transformed_content",
+                "",
+            )
+            reason = raw.get("reason", "")
+            conditions = raw.get("conditions", "")
+            destination = raw.get("destination", "")
+            authorized_effect = raw.get("authorized_effect", "")
+
+            for name, value in (
+                ("selected_fragment", selected_fragment),
+                ("reason", reason),
+                ("destination", destination),
+                ("authorized_effect", authorized_effect),
+            ):
+                if not isinstance(value, str) or not value.strip():
+                    raise TransitionRejected(
+                        f"MEMORY_TRANSFER item {index}: {name} is required."
+                    )
+
+            if not isinstance(human_transformed_content, str):
+                raise TransitionRejected(
+                    f"MEMORY_TRANSFER item {index}: "
+                    "human_transformed_content must be text."
+                )
+            if not isinstance(conditions, str):
+                raise TransitionRejected(
+                    f"MEMORY_TRANSFER item {index}: conditions must be text."
+                )
+
+            selected_fragment = selected_fragment.strip()
+            human_transformed_content = human_transformed_content.strip()
+            reason = reason.strip()
+            conditions = conditions.strip()
+            destination = destination.strip()
+            authorized_effect = authorized_effect.strip()
+
+            if selected_fragment not in candidate.original_content:
+                raise TransitionRejected(
+                    f"MEMORY_TRANSFER item {index}: selected fragment "
+                    "does not match the canonical memory candidate."
+                )
+
+            if (
+                selected.accepted_fragment
+                and selected_fragment not in selected.accepted_fragment
+                and selected.accepted_fragment not in selected_fragment
+            ):
+                raise TransitionRejected(
+                    f"MEMORY_TRANSFER item {index}: fragment differs "
+                    "from HUMAN-reviewed activation."
+                )
+
+            if destination != selected.destination:
+                raise TransitionRejected(
+                    f"MEMORY_TRANSFER item {index}: destination differs "
+                    "from HUMAN-reviewed selection."
+                )
+
+            if authorized_effect != selected.authorized_effect:
+                raise TransitionRejected(
+                    f"MEMORY_TRANSFER item {index}: authorized effect "
+                    "differs from HUMAN-reviewed selection."
+                )
+
+            if conditions != selected.conditions:
+                raise TransitionRejected(
+                    f"MEMORY_TRANSFER item {index}: conditions differ "
+                    "from HUMAN-reviewed selection."
+                )
+
+            if human_transformed_content != selected.human_transformed_content:
+                raise TransitionRejected(
+                    f"MEMORY_TRANSFER item {index}: HUMAN transformation "
+                    "differs from the reviewed selection."
+                )
+
+            transfer = MemoryTransferItem(
+                transfer_item_id=str(_hv_mem_uuid4()),
+                selection_item_id=selection_item_id,
+                candidate_id=candidate.candidate_id,
+                source_id=candidate.source_id,
+                source_actor=candidate.source_actor,
+                original_content=candidate.original_content,
+                selected_fragment=selected_fragment,
+                human_transformed_content=human_transformed_content,
+                reason=reason,
+                conditions=conditions,
+                destination=destination,
+                authorized_effect=authorized_effect,
+                provenance=candidate.provenance,
+                content_hash="",
+            )
+
+            transfer = _hv_mem_replace(
+                transfer,
+                content_hash=_hv_memory_transfer_item_hash(transfer),
+            )
+            built.append(transfer)
+
+        package = MemoryTransferPackage(
+            package_id=str(_hv_mem_uuid4()),
+            session_id=str(self.session_id or ""),
+            retrieval_id=retrieval.retrieval_id,
+            selection_id=selection.selection_id,
+            package_type="MEMORY_TRANSFER",
+            items=tuple(built),
+            status="DRAFT",
+            confirmed_by="",
+            confirmed_at="",
+            confirmed_content_hash="",
+            confirmation_note="",
+            locked_by="",
+            locked_at="",
+            content_hash="",
+            created_at=_hv_memory_now(),
+        )
+
+        package = _hv_mem_replace(
+            package,
+            content_hash=_hv_memory_transfer_hash(package),
+        )
+
+        self.memory_transfer_artifact = package
+        self.memory_transfer_history.append(package)
+        return package
+
+    def confirm_memory_selection_and_transfer(
+        self,
+        *,
+        actor: Actor,
+        selection_content_hash: str,
+        transfer_content_hash: str,
+        confirmation_note: str,
+    ) -> tuple[MemorySelection, MemoryTransferPackage]:
+        if actor is not Actor.HUMAN:
+            raise TransitionRejected(
+                "Only HUMAN can confirm memory activation and transfer."
+            )
+
+        if self.state is not S.MEMORY_SELECTION_CONFIRMATION_REQUIRED:
+            raise TransitionRejected(
+                "Memory confirmation is allowed only in "
+                "MEMORY_SELECTION_CONFIRMATION_REQUIRED."
+            )
+
+        selection = self.memory_selection_artifact
+        package = self.memory_transfer_artifact
+
+        if selection is None or package is None:
+            raise TransitionRejected(
+                "Memory Selection and MEMORY_TRANSFER package are required."
+            )
+
+        if selection.status != "DRAFT" or package.status != "DRAFT":
+            raise TransitionRejected(
+                "Memory activation/transfer is not awaiting confirmation."
+            )
+
+        if (
+            not isinstance(confirmation_note, str)
+            or len(confirmation_note.strip()) < 8
+        ):
+            raise TransitionRejected(
+                "HUMAN memory confirmation must be explicit."
+            )
+
+        self._validate_memory_selection_integrity(selection)
+        self._validate_memory_transfer_integrity(package)
+
+        if selection_content_hash.strip() != selection.content_hash:
+            raise TransitionRejected(
+                "HUMAN confirmation does not reference the exact "
+                "Memory Selection hash."
+            )
+
+        if transfer_content_hash.strip() != package.content_hash:
+            raise TransitionRejected(
+                "HUMAN confirmation does not reference the exact "
+                "MEMORY_TRANSFER hash."
+            )
+
+        now = _hv_memory_now()
+        note = confirmation_note.strip()
+
+        confirmed_selection = _hv_mem_replace(
+            selection,
+            status="HUMAN_CONFIRMED",
+            confirmed_by=Actor.HUMAN.value,
+            confirmed_at=now,
+            confirmed_content_hash=selection.content_hash,
+            confirmation_note=note,
+        )
+
+        confirmed_package = _hv_mem_replace(
+            package,
+            status="HUMAN_CONFIRMED",
+            confirmed_by=Actor.HUMAN.value,
+            confirmed_at=now,
+            confirmed_content_hash=package.content_hash,
+            confirmation_note=note,
+        )
+
+        self.memory_selection_artifact = confirmed_selection
+        self.memory_transfer_artifact = confirmed_package
+        self.memory_selection_history.append(confirmed_selection)
+        self.memory_transfer_history.append(confirmed_package)
+
+        return confirmed_selection, confirmed_package
+
+    def lock_memory_selection(
+        self,
+        *,
+        actor: Actor,
+    ) -> tuple[MemorySelection, MemoryTransferPackage]:
+        if actor is not Actor.SYSTEM:
+            raise TransitionRejected(
+                "Only SYSTEM can execute MEMORY_SELECTION_LOCKED."
+            )
+
+        if self.state is not S.MEMORY_SELECTION_CONFIRMATION_REQUIRED:
+            raise TransitionRejected(
+                "SYSTEM memory lock requires "
+                "MEMORY_SELECTION_CONFIRMATION_REQUIRED."
+            )
+
+        selection = self.memory_selection_artifact
+        package = self.memory_transfer_artifact
+
+        if selection is None or package is None:
+            raise TransitionRejected(
+                "Memory Selection and MEMORY_TRANSFER are required."
+            )
+
+        if (
+            selection.status != "HUMAN_CONFIRMED"
+            or package.status != "HUMAN_CONFIRMED"
+        ):
+            raise TransitionRejected(
+                "SYSTEM cannot lock memory before explicit HUMAN confirmation."
+            )
+
+        if (
+            selection.confirmed_by != Actor.HUMAN.value
+            or package.confirmed_by != Actor.HUMAN.value
+        ):
+            raise TransitionRejected(
+                "Memory confirmation provenance must be HUMAN."
+            )
+
+        self._validate_memory_selection_integrity(selection)
+        self._validate_memory_transfer_integrity(package)
+
+        if (
+            selection.confirmed_content_hash != selection.content_hash
+            or package.confirmed_content_hash != package.content_hash
+        ):
+            raise TransitionRejected(
+                "Memory content changed after HUMAN confirmation."
+            )
+
+        authorization = selection.content_hash + ":" + package.content_hash
+
+        self._memory_selection_lock_authorization_hash = authorization
+        try:
+            self.transition(
+                S.MEMORY_SELECTION_LOCKED,
+                actor,
+            )
+        finally:
+            self._memory_selection_lock_authorization_hash = None
+
+        now = _hv_memory_now()
+
+        locked_selection = _hv_mem_replace(
+            selection,
+            status="LOCKED",
+            locked_by=Actor.SYSTEM.value,
+            locked_at=now,
+        )
+
+        locked_package = _hv_mem_replace(
+            package,
+            status="LOCKED",
+            locked_by=Actor.SYSTEM.value,
+            locked_at=now,
+        )
+
+        self.memory_selection_artifact = locked_selection
+        self.memory_transfer_artifact = locked_package
+        self.memory_selection_history.append(locked_selection)
+        self.memory_transfer_history.append(locked_package)
+
+        return locked_selection, locked_package
+
+    def confirm_no_relevant_memory(
+        self,
+        *,
+        actor: Actor,
+        reason: str,
+    ) -> None:
+        if actor is not Actor.HUMAN:
+            raise TransitionRejected(
+                "Only HUMAN can confirm NO_RELEVANT_MEMORY."
+            )
+
+        if (
+            not isinstance(reason, str)
+            or len(reason.strip()) < 8
+        ):
+            raise TransitionRejected(
+                "NO_RELEVANT_MEMORY requires an explicit HUMAN reason."
+            )
+
+        if self.state is S.MEMORY_RETRIEVAL_RUNNING:
+            if (
+                self.retrieval_outcome
+                != RETRIEVAL_NO_RELEVANT_CANDIDATE_FOUND
+            ):
+                raise TransitionRejected(
+                    "Direct negative memory resolution requires "
+                    "NO_RELEVANT_CANDIDATE_FOUND."
+                )
+
+        elif self.state is S.MEMORY_REVIEW_REQUIRED:
+            if self.retrieval_outcome != RETRIEVAL_CANDIDATES_FOUND:
+                raise TransitionRejected(
+                    "Post-review negative resolution requires "
+                    "CANDIDATES_FOUND."
+                )
+
+            selection = self.memory_selection_artifact
+            if selection is None:
+                raise TransitionRejected(
+                    "HUMAN must review all candidates before "
+                    "NO_RELEVANT_MEMORY."
+                )
+
+            self._validate_memory_selection_integrity(selection)
+
+            if any(
+                item.decision in self._memory_active_decisions()
+                for item in selection.items
+            ):
+                raise TransitionRejected(
+                    "NO_RELEVANT_MEMORY is impossible while HUMAN has "
+                    "authorized active memory items."
+                )
+
+        else:
+            raise TransitionRejected(
+                "NO_RELEVANT_MEMORY can be confirmed only after retrieval "
+                "or after HUMAN memory review."
+            )
+
+        self._memory_negative_resolution_authorized = True
+        try:
+            self.transition(
+                S.NO_RELEVANT_MEMORY,
+                actor,
+            )
+        finally:
+            self._memory_negative_resolution_authorized = False
+
+        self.memory_negative_human_reason = reason.strip()
+
     def record_memory_retrieval_outcome(
         self,
         outcome: str,
@@ -3578,6 +4722,101 @@ class SystemOrchestrator:
                     "Manual Transfer technical lock must be executed through "
                     "lock_manual_transfer_package()."
                 )
+
+        # Active Agentic Memory cannot begin without the exact
+        # locked preliminary Manual Transfer package.
+        if (
+            source is S.MEMORY_RETRIEVAL_READY
+            and target is S.MEMORY_RETRIEVAL_RUNNING
+        ):
+            preliminary = self.manual_transfer_artifact
+            if (
+                preliminary is None
+                or preliminary.status != "LOCKED"
+                or preliminary.confirmed_by != Actor.HUMAN.value
+                or preliminary.locked_by != Actor.SYSTEM.value
+            ):
+                raise TransitionRejected(
+                    "Memory retrieval requires a HUMAN-confirmed, "
+                    "SYSTEM-locked preliminary Manual Transfer package."
+                )
+
+        # HUMAN confirms activation + exact manual MEMORY_TRANSFER;
+        # SYSTEM alone performs the technical MEMORY_SELECTION_LOCKED.
+        if (
+            source is S.MEMORY_SELECTION_CONFIRMATION_REQUIRED
+            and target is S.MEMORY_SELECTION_LOCKED
+        ):
+            if actor is not Actor.SYSTEM:
+                raise TransitionRejected(
+                    "MEMORY_SELECTION_LOCKED requires SYSTEM."
+                )
+
+            selection = self.memory_selection_artifact
+            package = self.memory_transfer_artifact
+
+            if selection is None or package is None:
+                raise TransitionRejected(
+                    "Memory technical lock requires persisted Selection "
+                    "and MEMORY_TRANSFER artifacts."
+                )
+
+            if (
+                selection.status != "HUMAN_CONFIRMED"
+                or package.status != "HUMAN_CONFIRMED"
+            ):
+                raise TransitionRejected(
+                    "Memory technical lock requires prior explicit "
+                    "HUMAN confirmation."
+                )
+
+            if (
+                selection.confirmed_by != Actor.HUMAN.value
+                or package.confirmed_by != Actor.HUMAN.value
+            ):
+                raise TransitionRejected(
+                    "Memory confirmation provenance must be HUMAN."
+                )
+
+            self._validate_memory_selection_integrity(selection)
+            self._validate_memory_transfer_integrity(package)
+
+            if (
+                selection.confirmed_content_hash != selection.content_hash
+                or package.confirmed_content_hash != package.content_hash
+            ):
+                raise TransitionRejected(
+                    "Memory technical lock requires the exact "
+                    "HUMAN-confirmed content."
+                )
+
+            required_authorization = (
+                selection.content_hash + ":" + package.content_hash
+            )
+
+            if (
+                self._memory_selection_lock_authorization_hash
+                != required_authorization
+            ):
+                raise TransitionRejected(
+                    "Memory technical lock must be executed through "
+                    "lock_memory_selection()."
+                )
+
+        # NO_RELEVANT_MEMORY is a HUMAN protocol resolution,
+        # never an automatic interpretation of retrieval or score.
+        if (
+            target is S.NO_RELEVANT_MEMORY
+            and source in {
+                S.MEMORY_RETRIEVAL_RUNNING,
+                S.MEMORY_REVIEW_REQUIRED,
+            }
+            and not self._memory_negative_resolution_authorized
+        ):
+            raise TransitionRejected(
+                "NO_RELEVANT_MEMORY requires explicit HUMAN resolution "
+                "through confirm_no_relevant_memory()."
+            )
 
         if (
             (source, target) in HUMAN_AUTHORITY_TRANSITIONS
