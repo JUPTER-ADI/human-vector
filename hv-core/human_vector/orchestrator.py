@@ -425,6 +425,92 @@ class CriticReview:
     created_revision: int
 
 
+HUMAN_CRITIC_DECISIONS = frozenset({
+    "ACCEPTED",
+    "REJECTED",
+    "PARTIALLY_ACCEPTED",
+    "NEEDS_CLARIFICATION",
+    "NEEDS_EXTERNAL_VERIFICATION",
+    "KEEP_AS_UNRESOLVED",
+    "TRANSFER_APPROVED",
+    "RETURN_TO_CRITIC",
+})
+
+
+@dataclass(frozen=True)
+class ConflictEntry:
+    conflict_id: str
+    conflict_type: str
+    source_actor: str
+    target_actor: str
+    source_object_type: str
+    source_object_id: str
+    target_object_type: str
+    target_object_id: str
+    title: str
+    central_issue: str
+    source_position: str
+    target_position: str
+    criticism: Criticism | None
+    basis: str
+    risk: str
+    severity: str
+    question: str
+    verification_required: str
+    correction_direction: str
+    status: str
+    provenance: str
+    created_revision: int
+
+
+@dataclass(frozen=True)
+class ConflictSpace:
+    space_id: str
+    session_id: str
+    source_version_id: str
+    source_content_hash: str
+    human_response_id: str
+    critic_review_id: str
+    human_direction: HumanDirection
+    source_version: ResultVersion
+    human_response: HumanCognitiveResponse
+    critic_review: CriticReview
+    entries: tuple[ConflictEntry, ...]
+    memory_reference_ids: tuple[str, ...]
+    status: str
+    actor: str
+    created_revision: int
+
+
+@dataclass(frozen=True)
+class HumanCriticDecision:
+    decision_id: str
+    space_id: str
+    criticism_id: str
+    decision: str
+    reason: str
+    human_observation: str
+    verification_performed: str
+    source_consulted: str
+    identified_limit: str
+    required_change: str
+    integration_condition: str
+    link_to_human_idea: str
+    risk_position: str
+    actor: str
+    created_revision: int
+
+
+@dataclass(frozen=True)
+class HumanCriticSelection:
+    selection_id: str
+    space_id: str
+    session_id: str
+    decisions: tuple[HumanCriticDecision, ...]
+    actor: str
+    created_revision: int
+
+
 @dataclass
 class SystemOrchestrator:
     state: S = S.SESSION_CREATED
@@ -440,6 +526,10 @@ class SystemOrchestrator:
     critic_package_history: list[CriticAnalysisPackage] = field(default_factory=list)
     critic_review_artifact: CriticReview | None = None
     critic_review_history: list[CriticReview] = field(default_factory=list)
+    conflict_space_artifact: ConflictSpace | None = None
+    conflict_space_history: list[ConflictSpace] = field(default_factory=list)
+    human_critic_selection_artifact: HumanCriticSelection | None = None
+    human_critic_selection_history: list[HumanCriticSelection] = field(default_factory=list)
     vf_locked_version_id: str | None = None
     vf_locked_content_hash: str | None = None
     retrieval_outcome: str | None = None
@@ -1068,6 +1158,16 @@ class SystemOrchestrator:
                     + ", ".join(sorted(missing))
                 )
 
+            target_object = item["object"].strip()
+            if target_object not in {
+                "BUILDER_V1",
+                "HUMAN_COGNITIVE_RESPONSE",
+            }:
+                raise TransitionRejected(
+                    f"Criticism {index} object must be exactly "
+                    "BUILDER_V1 or HUMAN_COGNITIVE_RESPONSE."
+                )
+
             normalized.append(
                 {
                     field_name: item[field_name]
@@ -1134,6 +1234,369 @@ class SystemOrchestrator:
         self.critic_review_history.append(review)
 
         return review
+
+    def build_conflict_space(self, actor: Actor) -> ConflictSpace:
+        from uuid import uuid4
+        if actor is not Actor.SYSTEM:
+            raise TransitionRejected(
+                "Conflict Space construction requires SYSTEM actor."
+            )
+
+        if self.state is not S.CRITIC_REVIEW_GENERATED:
+            raise TransitionRejected(
+                "Conflict Space construction requires CRITIC_REVIEW_GENERATED."
+            )
+
+        if self.conflict_space_artifact is not None:
+            raise TransitionRejected(
+                "Conflict Space already recorded for the current review."
+            )
+
+        review = self.critic_review_artifact
+        direction = self.human_direction_artifact
+        human_response = self.human_response_artifact
+
+        if review is None:
+            raise TransitionRejected(
+                "Conflict Space requires a persisted CriticReview."
+            )
+
+        if direction is None:
+            raise TransitionRejected(
+                "Conflict Space requires the confirmed Human Direction artifact."
+            )
+
+        if human_response is None:
+            raise TransitionRejected(
+                "Conflict Space requires the confirmed Human Cognitive Response."
+            )
+
+        source_version = self.result_versions.get(review.source_version_id)
+        if source_version is None:
+            raise TransitionRejected(
+                "Conflict Space requires the exact source ResultVersion."
+            )
+
+        if review.human_response_id != human_response.response_id:
+            raise TransitionRejected(
+                "Conflict Space Human Response does not match CriticReview."
+            )
+
+        if not review.criticisms:
+            raise TransitionRejected(
+                "Conflict Space requires at least one persisted criticism."
+            )
+
+        next_revision = self.revision + 1
+
+        if human_response.source_version_id != review.source_version_id:
+            raise TransitionRejected(
+                "Conflict Space Human Response source version does not match CriticReview."
+            )
+
+        if human_response.source_content_hash != review.source_content_hash:
+            raise TransitionRejected(
+                "Conflict Space Human Response source hash does not match CriticReview."
+            )
+
+        if not isinstance(human_response.contradiction, str) or not human_response.contradiction.strip():
+            raise TransitionRejected(
+                "Conflict Space requires the confirmed HUMAN contradiction."
+            )
+
+        human_builder_conflict = ConflictEntry(
+            conflict_id=str(uuid4()),
+            conflict_type="HUMAN_BUILDER_CONFLICT",
+            source_actor=Actor.HUMAN.value,
+            target_actor=Actor.BUILDER_AI.value,
+            source_object_type="HUMAN_COGNITIVE_RESPONSE",
+            source_object_id=human_response.response_id,
+            target_object_type="BUILDER_V1",
+            target_object_id=source_version.version_id,
+            title="HUMAN contradiction to Builder V1",
+            central_issue=human_response.contradiction,
+            source_position=human_response.contradiction,
+            target_position=source_version.content,
+            criticism=None,
+            basis=human_response.observation,
+            risk=human_response.risks,
+            severity="NOT_ASSIGNED",
+            question=human_response.critic_questions,
+            verification_required="",
+            correction_direction=human_response.own_idea,
+            status="UNRESOLVED",
+            provenance=Actor.HUMAN.value,
+            created_revision=next_revision,
+        )
+
+        critic_conflicts: list[ConflictEntry] = []
+
+        for criticism in review.criticisms:
+            target = criticism.object.strip().upper()
+
+            if target == "BUILDER_V1":
+                conflict_type = "CRITIC_BUILDER_CONFLICT"
+                target_actor = Actor.BUILDER_AI.value
+                target_object_type = "BUILDER_V1"
+                target_object_id = source_version.version_id
+                target_position = source_version.content
+
+            elif target == "HUMAN_COGNITIVE_RESPONSE":
+                conflict_type = "CRITIC_HUMAN_CONFLICT"
+                target_actor = Actor.HUMAN.value
+                target_object_type = "HUMAN_COGNITIVE_RESPONSE"
+                target_object_id = human_response.response_id
+                target_position = (
+                    "OBSERVATION: " + human_response.observation
+                    + "\nCONTRADICTION: " + human_response.contradiction
+                    + "\nOWN_IDEA: " + human_response.own_idea
+                )
+
+            else:
+                raise TransitionRejected(
+                    "Criticism object must be canonical: "
+                    "BUILDER_V1 or HUMAN_COGNITIVE_RESPONSE."
+                )
+
+            critic_conflicts.append(
+                ConflictEntry(
+                    conflict_id=str(uuid4()),
+                    conflict_type=conflict_type,
+                    source_actor=Actor.CRITIC_AI.value,
+                    target_actor=target_actor,
+                    source_object_type="CRITICISM",
+                    source_object_id=criticism.criticism_id,
+                    target_object_type=target_object_type,
+                    target_object_id=target_object_id,
+                    title=f"{conflict_type}: {criticism.criticism_type}",
+                    central_issue=criticism.explanation,
+                    source_position=criticism.explanation,
+                    target_position=target_position,
+                    criticism=criticism,
+                    basis=criticism.basis,
+                    risk=criticism.risk,
+                    severity=criticism.severity,
+                    question=criticism.question,
+                    verification_required=criticism.verification_required,
+                    correction_direction=criticism.correction_direction,
+                    status="UNRESOLVED",
+                    provenance=criticism.provenance,
+                    created_revision=next_revision,
+                )
+            )
+
+        entries = (
+            human_builder_conflict,
+            *critic_conflicts,
+        )
+
+
+        space = ConflictSpace(
+            space_id=str(uuid4()),
+            session_id=self.session_id,
+            source_version_id=review.source_version_id,
+            source_content_hash=review.source_content_hash,
+            human_response_id=review.human_response_id,
+            critic_review_id=review.review_id,
+            human_direction=direction,
+            source_version=source_version,
+            human_response=human_response,
+            critic_review=review,
+            entries=entries,
+            memory_reference_ids=(),
+            status="READY",
+            actor=Actor.SYSTEM.value,
+            created_revision=next_revision,
+        )
+
+        # Persist first so the generic transition guard can prove that the
+        # comparative artifact exists. Roll back atomically if transition fails.
+        self.conflict_space_artifact = space
+        self.conflict_space_history.append(space)
+
+        try:
+            self.transition(
+                S.CONFLICT_SPACE_READY,
+                Actor.SYSTEM,
+                "Structured Conflict Space built from exact HUMAN / Builder / Critic artifacts.",
+            )
+        except Exception:
+            self.conflict_space_artifact = None
+            if self.conflict_space_history and self.conflict_space_history[-1] is space:
+                self.conflict_space_history.pop()
+            raise
+
+        return space
+
+    def open_human_critic_selection(self, actor: Actor) -> None:
+        if actor is not Actor.ORCHESTRATOR:
+            raise TransitionRejected(
+                "Opening HUMAN Critic Selection requires ORCHESTRATOR actor."
+            )
+
+        if self.state is not S.CONFLICT_SPACE_READY:
+            raise TransitionRejected(
+                "HUMAN Critic Selection requires CONFLICT_SPACE_READY."
+            )
+
+        if self.conflict_space_artifact is None:
+            raise TransitionRejected(
+                "HUMAN Critic Selection requires a persisted Conflict Space."
+            )
+
+        self.transition(
+            S.HUMAN_CRITIC_SELECTION,
+            Actor.ORCHESTRATOR,
+            "Conflict Space presented for explicit HUMAN criticism selection.",
+        )
+
+    def record_human_critic_selection(
+        self,
+        actor: Actor,
+        decisions: list[dict[str, str]],
+    ) -> HumanCriticSelection:
+        from uuid import uuid4
+        if actor is not Actor.HUMAN:
+            raise TransitionRejected(
+                "Criticism selection requires HUMAN actor."
+            )
+
+        if self.state is not S.HUMAN_CRITIC_SELECTION:
+            raise TransitionRejected(
+                "Criticism selection requires HUMAN_CRITIC_SELECTION."
+            )
+
+        space = self.conflict_space_artifact
+        if space is None:
+            raise TransitionRejected(
+                "HUMAN Critic Selection requires the persisted Conflict Space."
+            )
+
+        if self.human_critic_selection_artifact is not None:
+            raise TransitionRejected(
+                "HUMAN Critic Selection already recorded."
+            )
+
+        if not isinstance(decisions, list) or not decisions:
+            raise TransitionRejected(
+                "HUMAN Critic Selection requires explicit decisions."
+            )
+
+        expected_ids = {
+            entry.criticism.criticism_id
+            for entry in space.entries
+            if entry.criticism is not None
+        }
+
+        normalized: list[dict[str, str]] = []
+        supplied_ids: list[str] = []
+
+        optional_fields = (
+            "reason",
+            "human_observation",
+            "verification_performed",
+            "source_consulted",
+            "identified_limit",
+            "required_change",
+            "integration_condition",
+            "link_to_human_idea",
+            "risk_position",
+        )
+
+        for index, item in enumerate(decisions, start=1):
+            if not isinstance(item, dict):
+                raise TransitionRejected(
+                    f"HUMAN decision {index} must be a mapping."
+                )
+
+            criticism_id = item.get("criticism_id")
+            decision = item.get("decision")
+
+            if not isinstance(criticism_id, str) or not criticism_id.strip():
+                raise TransitionRejected(
+                    f"HUMAN decision {index} requires criticism_id."
+                )
+
+            if not isinstance(decision, str) or not decision.strip():
+                raise TransitionRejected(
+                    f"HUMAN decision {index} requires an explicit decision."
+                )
+
+            criticism_id = criticism_id.strip()
+            decision = decision.strip().upper()
+
+            if decision not in HUMAN_CRITIC_DECISIONS:
+                raise TransitionRejected(
+                    f"Invalid HUMAN Critic decision: {decision}."
+                )
+
+            clean: dict[str, str] = {
+                "criticism_id": criticism_id,
+                "decision": decision,
+            }
+
+            for field_name in optional_fields:
+                value = item.get(field_name, "")
+                if value is None:
+                    value = ""
+                if not isinstance(value, str):
+                    raise TransitionRejected(
+                        f"HUMAN decision field {field_name} must be text."
+                    )
+                clean[field_name] = value
+
+            supplied_ids.append(criticism_id)
+            normalized.append(clean)
+
+        if len(supplied_ids) != len(set(supplied_ids)):
+            raise TransitionRejected(
+                "Each criticism may receive only one HUMAN decision."
+            )
+
+        supplied_set = set(supplied_ids)
+
+        if supplied_set != expected_ids:
+            missing = sorted(expected_ids - supplied_set)
+            unknown = sorted(supplied_set - expected_ids)
+            raise TransitionRejected(
+                "Every criticism requires an explicit HUMAN decision; "
+                f"missing={missing}, unknown={unknown}."
+            )
+
+        decision_records = tuple(
+            HumanCriticDecision(
+                decision_id=str(uuid4()),
+                space_id=space.space_id,
+                criticism_id=item["criticism_id"],
+                decision=item["decision"],
+                reason=item["reason"],
+                human_observation=item["human_observation"],
+                verification_performed=item["verification_performed"],
+                source_consulted=item["source_consulted"],
+                identified_limit=item["identified_limit"],
+                required_change=item["required_change"],
+                integration_condition=item["integration_condition"],
+                link_to_human_idea=item["link_to_human_idea"],
+                risk_position=item["risk_position"],
+                actor=Actor.HUMAN.value,
+                created_revision=self.revision,
+            )
+            for item in normalized
+        )
+
+        selection = HumanCriticSelection(
+            selection_id=str(uuid4()),
+            space_id=space.space_id,
+            session_id=self.session_id,
+            decisions=decision_records,
+            actor=Actor.HUMAN.value,
+            created_revision=self.revision,
+        )
+
+        self.human_critic_selection_artifact = selection
+        self.human_critic_selection_history.append(selection)
+
+        return selection
 
     def _vf_final_integrity_allows_locking(
         self,
@@ -2282,6 +2745,37 @@ class SystemOrchestrator:
                 f"Agent ownership required: "
                 f"{source.value} -> {target.value} requires "
                 f"{required_actor.value}"
+            )
+
+        if (
+            source is S.CRITIC_REVIEW_GENERATED
+            and target is S.CONFLICT_SPACE_READY
+            and self.conflict_space_artifact is None
+        ):
+            raise TransitionRejected(
+                "CONFLICT_SPACE_READY requires a persisted Conflict Space."
+            )
+
+        if (
+            source is S.CONFLICT_SPACE_READY
+            and target is S.HUMAN_CRITIC_SELECTION
+            and self.conflict_space_artifact is None
+        ):
+            raise TransitionRejected(
+                "HUMAN_CRITIC_SELECTION requires a persisted Conflict Space."
+            )
+
+        if (
+            source is S.HUMAN_CRITIC_SELECTION
+            and target in {
+                S.CRITIC_CLARIFICATION_REQUIRED,
+                S.MANUAL_TRANSFER_PREPARATION,
+                S.SESSION_PAUSED,
+            }
+            and self.human_critic_selection_artifact is None
+        ):
+            raise TransitionRejected(
+                "Leaving HUMAN_CRITIC_SELECTION requires explicit persisted HUMAN decisions."
             )
 
         if not self._vf_precheck_transition_allowed(
