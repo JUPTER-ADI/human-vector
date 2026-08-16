@@ -241,6 +241,37 @@ class VFFinalIntegrityResult:
 
 
 @dataclass(frozen=True)
+class VersionComparison:
+    comparison_id: str
+    session_id: str
+    base_version_id: str
+    base_version_label: str
+    base_content_hash: str
+    candidate_version_id: str
+    candidate_version_label: str
+    candidate_content_hash: str
+    content_changed: bool
+    unified_diff: str
+    status: str
+    generated_revision: int
+
+
+@dataclass(frozen=True)
+class HumanVerification:
+    verification_id: str
+    session_id: str
+    comparison_id: str
+    candidate_version_id: str
+    candidate_version_label: str
+    candidate_content_hash: str
+    evidence_sufficient: bool
+    verification_note: str
+    verified_by: str
+    status: str
+    verified_revision: int
+
+
+@dataclass(frozen=True)
 class VFHumanDeclaration:
     selected_version: str
     selected_version_id: str
@@ -1039,6 +1070,14 @@ class SystemOrchestrator:
     history: list[TransitionRecord] = field(default_factory=list)
     session_id: str | None = None
     result_versions: dict[str, ResultVersion] = field(default_factory=dict)
+    version_comparison_artifact: VersionComparison | None = None
+    version_comparison_history: list[VersionComparison] = field(
+        default_factory=list
+    )
+    human_verification_artifact: HumanVerification | None = None
+    human_verification_history: list[HumanVerification] = field(
+        default_factory=list
+    )
     human_direction_artifact: HumanDirection | None = None
     human_direction_history: list[HumanDirection] = field(default_factory=list)
     human_response_artifact: HumanCognitiveResponse | None = None
@@ -2964,6 +3003,244 @@ class SystemOrchestrator:
         )
         self.vf_human_declaration_revision = self.revision
 
+    def generate_version_comparison(
+        self,
+        *,
+        base_version_id: str,
+        candidate_version_id: str,
+        actor: Actor,
+    ) -> VersionComparison:
+        from difflib import unified_diff
+        from hashlib import sha256
+        from uuid import uuid4
+
+        if actor is not Actor.ORCHESTRATOR:
+            raise TransitionRejected(
+                "Version Comparison requires ORCHESTRATOR actor."
+            )
+
+        if self.state not in {
+            S.VN_GENERATED,
+            S.VERSION_COMPARISON_READY,
+        }:
+            raise TransitionRejected(
+                "Version Comparison requires VN_GENERATED or "
+                "VERSION_COMPARISON_READY."
+            )
+
+        base = self.result_versions.get(base_version_id)
+        candidate = self.result_versions.get(candidate_version_id)
+
+        if base is None or candidate is None:
+            raise TransitionRejected(
+                "Version Comparison requires two persisted ResultVersions."
+            )
+
+        if base.session_id != self.session_id:
+            raise TransitionRejected(
+                "Base ResultVersion does not belong to this session."
+            )
+
+        if candidate.session_id != self.session_id:
+            raise TransitionRejected(
+                "Candidate ResultVersion does not belong to this session."
+            )
+
+        if base.version_id == candidate.version_id:
+            raise TransitionRejected(
+                "Version Comparison requires distinct ResultVersions."
+            )
+
+        if base.version_label != "V1":
+            raise TransitionRejected(
+                "Canonical Version Comparison base must be V1."
+            )
+
+        if candidate.version_label == "V1":
+            raise TransitionRejected(
+                "Version Comparison candidate must be a reconstructed Vn."
+            )
+
+        base_hash = sha256(
+            base.content.encode("utf-8")
+        ).hexdigest()
+
+        candidate_hash = sha256(
+            candidate.content.encode("utf-8")
+        ).hexdigest()
+
+        if base_hash != base.content_hash:
+            raise TransitionRejected(
+                "Canonical V1 content hash integrity check failed."
+            )
+
+        if candidate_hash != candidate.content_hash:
+            raise TransitionRejected(
+                "Candidate Vn content hash integrity check failed."
+            )
+
+        if self.state is S.VN_GENERATED:
+            self.transition(
+                S.VERSION_COMPARISON_READY,
+                Actor.ORCHESTRATOR,
+                reason=(
+                    "ORCHESTRATOR opens deterministic Version Comparison."
+                ),
+            )
+
+        diff_text = "".join(
+            unified_diff(
+                base.content.splitlines(keepends=True),
+                candidate.content.splitlines(keepends=True),
+                fromfile=base.version_label,
+                tofile=candidate.version_label,
+            )
+        )
+
+        comparison = VersionComparison(
+            comparison_id=str(uuid4()),
+            session_id=self.session_id,
+            base_version_id=base.version_id,
+            base_version_label=base.version_label,
+            base_content_hash=base.content_hash,
+            candidate_version_id=candidate.version_id,
+            candidate_version_label=candidate.version_label,
+            candidate_content_hash=candidate.content_hash,
+            content_changed=(base.content != candidate.content),
+            unified_diff=diff_text,
+            status="GENERATED",
+            generated_revision=self.revision,
+        )
+
+        self.version_comparison_artifact = comparison
+        self.version_comparison_history.append(comparison)
+
+        self.transition(
+            S.VERSION_COMPARISON_GENERATED,
+            Actor.ORCHESTRATOR,
+            reason=(
+                "Deterministic Version Comparison persisted for exact "
+                f"{base.version_label} -> {candidate.version_label}."
+            ),
+        )
+
+        self.transition(
+            S.HUMAN_VERIFICATION_REQUIRED,
+            Actor.ORCHESTRATOR,
+            reason=(
+                "Version Comparison generated; HUMAN verification required."
+            ),
+        )
+
+        return comparison
+
+    def record_human_verification(
+        self,
+        *,
+        comparison_id: str,
+        candidate_version_id: str,
+        candidate_content_hash: str,
+        evidence_sufficient: bool,
+        verification_note: str,
+        actor: Actor,
+    ) -> HumanVerification:
+        from hashlib import sha256
+        from uuid import uuid4
+
+        if self.state is not S.HUMAN_VERIFICATION_REQUIRED:
+            raise TransitionRejected(
+                "Human Verification requires HUMAN_VERIFICATION_REQUIRED."
+            )
+
+        if actor is not Actor.HUMAN:
+            raise TransitionRejected(
+                "Human Verification requires HUMAN actor."
+            )
+
+        if not verification_note.strip():
+            raise TransitionRejected(
+                "Human Verification requires an explicit HUMAN note."
+            )
+
+        comparison = self.version_comparison_artifact
+
+        if comparison is None:
+            raise TransitionRejected(
+                "Human Verification requires a persisted Version Comparison."
+            )
+
+        if comparison.status != "GENERATED":
+            raise TransitionRejected(
+                "Human Verification requires a generated Version Comparison."
+            )
+
+        if comparison.comparison_id != comparison_id:
+            raise TransitionRejected(
+                "Human Verification comparison_id mismatch."
+            )
+
+        if comparison.candidate_version_id != candidate_version_id:
+            raise TransitionRejected(
+                "Human Verification candidate version mismatch."
+            )
+
+        if comparison.candidate_content_hash != candidate_content_hash:
+            raise TransitionRejected(
+                "Human Verification candidate hash mismatch."
+            )
+
+        candidate = self.result_versions.get(candidate_version_id)
+
+        if candidate is None:
+            raise TransitionRejected(
+                "Human Verification candidate ResultVersion is missing."
+            )
+
+        live_hash = sha256(
+            candidate.content.encode("utf-8")
+        ).hexdigest()
+
+        if (
+            candidate.content_hash != candidate_content_hash
+            or live_hash != candidate_content_hash
+        ):
+            raise TransitionRejected(
+                "Human Verification candidate integrity check failed."
+            )
+
+        verification = HumanVerification(
+            verification_id=str(uuid4()),
+            session_id=self.session_id,
+            comparison_id=comparison.comparison_id,
+            candidate_version_id=candidate.version_id,
+            candidate_version_label=candidate.version_label,
+            candidate_content_hash=candidate.content_hash,
+            evidence_sufficient=bool(evidence_sufficient),
+            verification_note=verification_note.strip(),
+            verified_by=Actor.HUMAN.value,
+            status=(
+                "VERIFIED"
+                if evidence_sufficient
+                else "EVIDENCE_INSUFFICIENT"
+            ),
+            verified_revision=self.revision,
+        )
+
+        self.human_verification_artifact = verification
+        self.human_verification_history.append(verification)
+
+        if evidence_sufficient:
+            self.transition(
+                S.VF_PRECHECK_REQUIRED,
+                Actor.HUMAN,
+                reason=(
+                    "HUMAN verified the exact compared Vn and authorized "
+                    "VF technical precheck."
+                ),
+            )
+
+        return verification
+
     def record_vf_precheck_result(
         self,
         *,
@@ -2981,6 +3258,84 @@ class SystemOrchestrator:
             raise TransitionRejected(
                 "VF precheck result requires SYSTEM actor."
             )
+
+        if code == VF_PRECHECK_OK:
+            from hashlib import sha256
+
+            comparison = self.version_comparison_artifact
+            verification = self.human_verification_artifact
+
+            if comparison is None:
+                raise TransitionRejected(
+                    "VF_PRECHECK_OK requires persisted Version Comparison."
+                )
+
+            if verification is None:
+                raise TransitionRejected(
+                    "VF_PRECHECK_OK requires persisted HUMAN Verification."
+                )
+
+            if comparison.status != "GENERATED":
+                raise TransitionRejected(
+                    "VF_PRECHECK_OK requires generated Version Comparison."
+                )
+
+            if (
+                verification.status != "VERIFIED"
+                or not verification.evidence_sufficient
+            ):
+                raise TransitionRejected(
+                    "VF_PRECHECK_OK requires sufficient HUMAN Verification."
+                )
+
+            if verification.verified_by != Actor.HUMAN.value:
+                raise TransitionRejected(
+                    "VF_PRECHECK_OK requires HUMAN-owned verification."
+                )
+
+            if verification.comparison_id != comparison.comparison_id:
+                raise TransitionRejected(
+                    "VF_PRECHECK_OK comparison/verification binding failed."
+                )
+
+            if (
+                verification.candidate_version_id
+                != comparison.candidate_version_id
+            ):
+                raise TransitionRejected(
+                    "VF_PRECHECK_OK candidate version binding failed."
+                )
+
+            if (
+                verification.candidate_content_hash
+                != comparison.candidate_content_hash
+            ):
+                raise TransitionRejected(
+                    "VF_PRECHECK_OK candidate hash binding failed."
+                )
+
+            candidate = self.result_versions.get(
+                comparison.candidate_version_id
+            )
+
+            if candidate is None:
+                raise TransitionRejected(
+                    "VF_PRECHECK_OK candidate ResultVersion is missing."
+                )
+
+            live_hash = sha256(
+                candidate.content.encode("utf-8")
+            ).hexdigest()
+
+            if (
+                candidate.content_hash
+                != comparison.candidate_content_hash
+                or live_hash
+                != comparison.candidate_content_hash
+            ):
+                raise TransitionRejected(
+                    "VF_PRECHECK_OK candidate integrity check failed."
+                )
 
         if self.session_mode not in VALID_SESSION_MODES:
             raise TransitionRejected(
