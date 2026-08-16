@@ -106,10 +106,6 @@ HUMAN_AUTHORITY_TRANSITIONS = frozenset({
         S.RECONSTRUCTION_PACKAGE_CONFIRMATION_REQUIRED,
         S.MEMORY_REVIEW_REQUIRED,
     ),
-    (
-        S.RECONSTRUCTION_PACKAGE_CONFIRMATION_REQUIRED,
-        S.RECONSTRUCTION_PACKAGE_READY,
-    ),
 
     (
         S.HUMAN_VERIFICATION_REQUIRED,
@@ -139,6 +135,7 @@ AGENT_OWNED_TRANSITIONS = {
     (S.MEMORY_SELECTION_LOCKED, S.RECONSTRUCTION_PACKAGE_PREPARATION): Actor.ORCHESTRATOR,
     (S.NO_RELEVANT_MEMORY, S.RECONSTRUCTION_PACKAGE_PREPARATION): Actor.ORCHESTRATOR,
     (S.RECONSTRUCTION_PACKAGE_PREPARATION, S.RECONSTRUCTION_PACKAGE_CONFIRMATION_REQUIRED): Actor.ORCHESTRATOR,
+    (S.RECONSTRUCTION_PACKAGE_CONFIRMATION_REQUIRED, S.RECONSTRUCTION_PACKAGE_READY): Actor.SYSTEM,
     (S.RECONSTRUCTION_PACKAGE_READY, S.RECONSTRUCTION_RUNNING): Actor.ORCHESTRATOR,
     (S.RECONSTRUCTION_RUNNING, S.VN_GENERATED): Actor.BUILDER_AI,
     (S.VN_GENERATED, S.VERSION_COMPARISON_READY): Actor.ORCHESTRATOR,
@@ -485,6 +482,131 @@ def _hv_memory_transfer_hash(
             }
             for item in artifact.items
         ],
+    })
+
+
+
+from copy import deepcopy as _hv_rc_deepcopy
+from dataclasses import (
+    asdict as _hv_rc_asdict,
+    is_dataclass as _hv_rc_is_dataclass,
+    replace as _hv_rc_replace,
+)
+from datetime import (
+    datetime as _hv_rc_datetime,
+    timezone as _hv_rc_timezone,
+)
+from uuid import uuid4 as _hv_rc_uuid4
+
+
+def _hv_rc_now() -> str:
+    return _hv_rc_datetime.now(_hv_rc_timezone.utc).isoformat()
+
+
+def _hv_rc_snapshot(value):
+    if value is None:
+        return None
+
+    if _hv_rc_is_dataclass(value):
+        return _hv_rc_asdict(value)
+
+    if isinstance(value, dict):
+        return _hv_rc_deepcopy(value)
+
+    if hasattr(value, "__dict__"):
+        return _hv_rc_deepcopy(vars(value))
+
+    raise TypeError(
+        f"Unsupported Final Reconstruction snapshot type: "
+        f"{type(value).__name__}"
+    )
+
+
+def _hv_rc_hash(payload: dict) -> str:
+    import hashlib
+    import json
+
+    raw = json.dumps(
+        payload,
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        default=str,
+    )
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+@dataclass(frozen=True)
+class FinalReconstructionPackage:
+    package_id: str
+    session_id: str
+    package_revision: int
+
+    source_version_id: str
+    source_version_label: str
+    source_version_content_hash: str
+
+    human_direction: dict
+    human_response: dict
+    human_critic_selection: dict
+
+    conflict_space_id: str
+    critic_review_id: str
+
+    manual_transfer: dict
+
+    memory_mode: str
+    memory_selection: dict | None
+    memory_transfer: dict | None
+    no_relevant_memory_reason: str
+
+    builder_use_contract: str
+
+    status: str
+
+    confirmed_by: str
+    confirmed_at: str
+    confirmed_content_hash: str
+    confirmation_note: str
+
+    locked_by: str
+    locked_at: str
+
+    content_hash: str
+    created_at: str
+    created_revision: int
+
+
+def _hv_rc_package_hash(
+    package: FinalReconstructionPackage,
+) -> str:
+    return _hv_rc_hash({
+        "session_id": package.session_id,
+        "package_revision": package.package_revision,
+
+        "source_version_id": package.source_version_id,
+        "source_version_label": package.source_version_label,
+        "source_version_content_hash":
+            package.source_version_content_hash,
+
+        "human_direction": package.human_direction,
+        "human_response": package.human_response,
+        "human_critic_selection":
+            package.human_critic_selection,
+
+        "conflict_space_id": package.conflict_space_id,
+        "critic_review_id": package.critic_review_id,
+
+        "manual_transfer": package.manual_transfer,
+
+        "memory_mode": package.memory_mode,
+        "memory_selection": package.memory_selection,
+        "memory_transfer": package.memory_transfer,
+        "no_relevant_memory_reason":
+            package.no_relevant_memory_reason,
+
+        "builder_use_contract":
+            package.builder_use_contract,
     })
 
 
@@ -969,6 +1091,15 @@ class SystemOrchestrator:
     vf_precheck_target: S | None = None
     vf_precheck_reason: str = ""
     vf_precheck_revision: int | None = None
+    reconstruction_package_artifact: FinalReconstructionPackage | None = None
+    reconstruction_package_history: list[FinalReconstructionPackage] = field(
+        default_factory=list
+    )
+    _reconstruction_package_lock_authorization_hash: str | None = field(
+        default=None,
+        repr=False,
+    )
+
     memory_effect_verifications: list[MemoryEffectVerification] = field(
         default_factory=list
     )
@@ -3523,6 +3654,659 @@ class SystemOrchestrator:
         self.manual_transfer_history.append(locked)
         return locked
 
+
+    def _find_result_version_by_id(
+        self,
+        version_id: str,
+    ):
+        if not isinstance(version_id, str) or not version_id.strip():
+            raise TransitionRejected(
+                "Final Reconstruction requires source_version_id."
+            )
+
+        for version in self.result_versions.values():
+            candidate_id = (
+                getattr(version, "version_id", None)
+                if not isinstance(version, dict)
+                else version.get("version_id")
+            )
+
+            if candidate_id == version_id.strip():
+                return version
+
+        raise TransitionRejected(
+            "Final Reconstruction source ResultVersion does not exist."
+        )
+
+    def _resolve_final_reconstruction_memory_mode(self) -> str:
+        latest_source = None
+
+        if self.history:
+            latest = self.history[-1]
+            if latest.target is S.RECONSTRUCTION_PACKAGE_PREPARATION:
+                latest_source = latest.source
+
+        if latest_source is S.MEMORY_SELECTION_LOCKED:
+            return "MEMORY_TRANSFER"
+
+        if latest_source is S.NO_RELEVANT_MEMORY:
+            return "NO_RELEVANT_MEMORY"
+
+        memory_selection = self.memory_selection_artifact
+        memory_transfer = self.memory_transfer_artifact
+
+        if (
+            memory_selection is not None
+            and memory_transfer is not None
+            and memory_selection.status == "LOCKED"
+            and memory_transfer.status == "LOCKED"
+        ):
+            return "MEMORY_TRANSFER"
+
+        if (
+            self.memory_resolution_outcome
+            == MEMORY_RESOLUTION_NO_RELEVANT_MEMORY
+            and self.memory_negative_human_reason
+        ):
+            return "NO_RELEVANT_MEMORY"
+
+        raise TransitionRejected(
+            "Final Reconstruction requires either a locked MEMORY_TRANSFER "
+            "or explicit HUMAN NO_RELEVANT_MEMORY resolution."
+        )
+
+    def _collect_final_reconstruction_sources(
+        self,
+        *,
+        memory_mode: str,
+    ) -> dict:
+        direction = self.human_direction_artifact
+        response = self.human_response_artifact
+        critic_review = self.critic_review_artifact
+        conflict = self.conflict_space_artifact
+        human_selection = self.human_critic_selection_artifact
+        manual_transfer = self.manual_transfer_artifact
+
+        if direction is None:
+            raise TransitionRejected(
+                "Final Reconstruction requires confirmed Human Direction."
+            )
+
+        if getattr(direction, "status", None) != "CONFIRMED":
+            raise TransitionRejected(
+                "Final Reconstruction requires CONFIRMED Human Direction."
+            )
+
+        if response is None:
+            raise TransitionRejected(
+                "Final Reconstruction requires Human Cognitive Response."
+            )
+
+        if critic_review is None:
+            raise TransitionRejected(
+                "Final Reconstruction requires CriticReview."
+            )
+
+        if conflict is None:
+            raise TransitionRejected(
+                "Final Reconstruction requires Conflict Space."
+            )
+
+        if human_selection is None:
+            raise TransitionRejected(
+                "Final Reconstruction requires HUMAN Critic Selection."
+            )
+
+        selection_actor = getattr(
+            human_selection,
+            "actor",
+            None,
+        )
+
+        if selection_actor != Actor.HUMAN.value:
+            raise TransitionRejected(
+                "Final Reconstruction Critic Selection provenance "
+                "must be HUMAN."
+            )
+
+        if manual_transfer is None:
+            raise TransitionRejected(
+                "Final Reconstruction requires Manual Transfer."
+            )
+
+        if (
+            getattr(manual_transfer, "status", None) != "LOCKED"
+            or getattr(
+                manual_transfer,
+                "confirmed_by",
+                None,
+            ) != Actor.HUMAN.value
+            or getattr(
+                manual_transfer,
+                "locked_by",
+                None,
+            ) != Actor.SYSTEM.value
+        ):
+            raise TransitionRejected(
+                "Final Reconstruction requires the exact HUMAN-confirmed, "
+                "SYSTEM-locked Manual Transfer package."
+            )
+
+        source_version_id = getattr(
+            manual_transfer,
+            "source_version_id",
+            "",
+        )
+
+        source_version = self._find_result_version_by_id(
+            source_version_id
+        )
+
+        version_label = (
+            getattr(source_version, "version_label", None)
+            if not isinstance(source_version, dict)
+            else source_version.get("version_label")
+        )
+
+        version_content_hash = (
+            getattr(source_version, "content_hash", None)
+            if not isinstance(source_version, dict)
+            else source_version.get("content_hash")
+        )
+
+        if version_label != "V1":
+            raise TransitionRejected(
+                "Final Reconstruction must be bound to canonical V1."
+            )
+
+        if (
+            not isinstance(version_content_hash, str)
+            or not version_content_hash.strip()
+        ):
+            raise TransitionRejected(
+                "Canonical V1 must have a content hash."
+            )
+
+        response_source_version_id = getattr(
+            response,
+            "source_version_id",
+            None,
+        )
+
+        if response_source_version_id != source_version_id:
+            raise TransitionRejected(
+                "Human Cognitive Response is not bound to canonical V1."
+            )
+
+        critic_source_version_id = getattr(
+            critic_review,
+            "source_version_id",
+            None,
+        )
+
+        if critic_source_version_id != source_version_id:
+            raise TransitionRejected(
+                "CriticReview is not bound to canonical V1."
+            )
+
+        conflict_source_version_id = getattr(
+            conflict,
+            "source_version_id",
+            None,
+        )
+
+        if conflict_source_version_id != source_version_id:
+            raise TransitionRejected(
+                "Conflict Space is not bound to canonical V1."
+            )
+
+        human_selection_source_version_id = getattr(
+            human_selection,
+            "source_version_id",
+            None,
+        )
+
+        if (
+            human_selection_source_version_id is not None
+            and human_selection_source_version_id
+            != source_version_id
+        ):
+            raise TransitionRejected(
+                "HUMAN Critic Selection is not bound to canonical V1."
+            )
+
+        memory_selection_snapshot = None
+        memory_transfer_snapshot = None
+        no_relevant_reason = ""
+
+        if memory_mode == "MEMORY_TRANSFER":
+            memory_selection = self.memory_selection_artifact
+            memory_transfer = self.memory_transfer_artifact
+
+            if memory_selection is None or memory_transfer is None:
+                raise TransitionRejected(
+                    "Final Reconstruction MEMORY_TRANSFER branch requires "
+                    "Memory Selection and Memory Transfer."
+                )
+
+            if (
+                memory_selection.status != "LOCKED"
+                or memory_transfer.status != "LOCKED"
+                or memory_selection.confirmed_by
+                != Actor.HUMAN.value
+                or memory_transfer.confirmed_by
+                != Actor.HUMAN.value
+                or memory_selection.locked_by
+                != Actor.SYSTEM.value
+                or memory_transfer.locked_by
+                != Actor.SYSTEM.value
+            ):
+                raise TransitionRejected(
+                    "Final Reconstruction requires exact HUMAN-confirmed, "
+                    "SYSTEM-locked memory artifacts."
+                )
+
+            self._validate_memory_selection_integrity(
+                memory_selection
+            )
+            self._validate_memory_transfer_integrity(
+                memory_transfer
+            )
+
+            memory_selection_snapshot = _hv_rc_snapshot(
+                memory_selection
+            )
+            memory_transfer_snapshot = _hv_rc_snapshot(
+                memory_transfer
+            )
+
+        elif memory_mode == "NO_RELEVANT_MEMORY":
+            if (
+                self.memory_resolution_outcome
+                != MEMORY_RESOLUTION_NO_RELEVANT_MEMORY
+                or not self.memory_negative_human_reason
+            ):
+                raise TransitionRejected(
+                    "NO_RELEVANT_MEMORY branch requires explicit HUMAN "
+                    "memory resolution and persisted reason."
+                )
+
+            no_relevant_reason = (
+                self.memory_negative_human_reason.strip()
+            )
+
+            if self.memory_selection_artifact is not None:
+                memory_selection_snapshot = _hv_rc_snapshot(
+                    self.memory_selection_artifact
+                )
+
+        else:
+            raise TransitionRejected(
+                f"Unsupported Final Reconstruction memory mode: "
+                f"{memory_mode!r}."
+            )
+
+        return {
+            "source_version_id": source_version_id,
+            "source_version_label": version_label,
+            "source_version_content_hash":
+                version_content_hash,
+
+            "human_direction":
+                _hv_rc_snapshot(direction),
+
+            "human_response":
+                _hv_rc_snapshot(response),
+
+            "human_critic_selection":
+                _hv_rc_snapshot(human_selection),
+
+            "conflict_space_id":
+                str(getattr(conflict, "space_id", "")),
+
+            "critic_review_id":
+                str(getattr(critic_review, "review_id", "")),
+
+            "manual_transfer":
+                _hv_rc_snapshot(manual_transfer),
+
+            "memory_selection":
+                memory_selection_snapshot,
+
+            "memory_transfer":
+                memory_transfer_snapshot,
+
+            "no_relevant_memory_reason":
+                no_relevant_reason,
+        }
+
+    def _validate_final_reconstruction_package_integrity(
+        self,
+        package: FinalReconstructionPackage,
+        *,
+        verify_live_sources: bool = True,
+    ) -> None:
+        if package.content_hash != _hv_rc_package_hash(package):
+            raise TransitionRejected(
+                "Final Reconstruction Package integrity check failed."
+            )
+
+        if not verify_live_sources:
+            return
+
+        current = self._collect_final_reconstruction_sources(
+            memory_mode=package.memory_mode,
+        )
+
+        checks = {
+            "source_version_id":
+                package.source_version_id,
+            "source_version_label":
+                package.source_version_label,
+            "source_version_content_hash":
+                package.source_version_content_hash,
+            "human_direction":
+                package.human_direction,
+            "human_response":
+                package.human_response,
+            "human_critic_selection":
+                package.human_critic_selection,
+            "conflict_space_id":
+                package.conflict_space_id,
+            "critic_review_id":
+                package.critic_review_id,
+            "manual_transfer":
+                package.manual_transfer,
+            "memory_selection":
+                package.memory_selection,
+            "memory_transfer":
+                package.memory_transfer,
+            "no_relevant_memory_reason":
+                package.no_relevant_memory_reason,
+        }
+
+        for name, expected in checks.items():
+            if current[name] != expected:
+                raise TransitionRejected(
+                    "Final Reconstruction live-source integrity "
+                    f"check failed: {name}."
+                )
+
+    def build_final_reconstruction_package(
+        self,
+        *,
+        actor: Actor,
+    ) -> FinalReconstructionPackage:
+        if actor is not Actor.ORCHESTRATOR:
+            raise TransitionRejected(
+                "Only ORCHESTRATOR can build Final Reconstruction Package."
+            )
+
+        if self.state is not S.RECONSTRUCTION_PACKAGE_PREPARATION:
+            raise TransitionRejected(
+                "Final Reconstruction Package can be built only in "
+                "RECONSTRUCTION_PACKAGE_PREPARATION."
+            )
+
+        memory_mode = (
+            self._resolve_final_reconstruction_memory_mode()
+        )
+
+        sources = self._collect_final_reconstruction_sources(
+            memory_mode=memory_mode,
+        )
+
+        previous_revisions = [
+            item.package_revision
+            for item in self.reconstruction_package_history
+        ]
+
+        package_revision = (
+            max(previous_revisions) + 1
+            if previous_revisions
+            else 1
+        )
+
+        package = FinalReconstructionPackage(
+            package_id=str(_hv_rc_uuid4()),
+            session_id=str(self.session_id or ""),
+            package_revision=package_revision,
+
+            source_version_id=
+                sources["source_version_id"],
+            source_version_label=
+                sources["source_version_label"],
+            source_version_content_hash=
+                sources["source_version_content_hash"],
+
+            human_direction=
+                sources["human_direction"],
+            human_response=
+                sources["human_response"],
+            human_critic_selection=
+                sources["human_critic_selection"],
+
+            conflict_space_id=
+                sources["conflict_space_id"],
+            critic_review_id=
+                sources["critic_review_id"],
+
+            manual_transfer=
+                sources["manual_transfer"],
+
+            memory_mode=memory_mode,
+            memory_selection=
+                sources["memory_selection"],
+            memory_transfer=
+                sources["memory_transfer"],
+            no_relevant_memory_reason=
+                sources["no_relevant_memory_reason"],
+
+            builder_use_contract=(
+                "Builder Reconstruction MUST preserve confirmed Human "
+                "Direction and canonical V1. Cognitive modifications may "
+                "use ONLY the explicitly authorized items in the locked "
+                "Manual Transfer package and, when memory_mode is "
+                "MEMORY_TRANSFER, ONLY the explicitly authorized items "
+                "in the locked MEMORY_TRANSFER package. Human Response "
+                "and HUMAN Critic Selection are included for traceability "
+                "and provenance, not as blanket authorization to import "
+                "unselected material."
+            ),
+
+            status="DRAFT",
+
+            confirmed_by="",
+            confirmed_at="",
+            confirmed_content_hash="",
+            confirmation_note="",
+
+            locked_by="",
+            locked_at="",
+
+            content_hash="",
+            created_at=_hv_rc_now(),
+            created_revision=self.revision,
+        )
+
+        package = _hv_rc_replace(
+            package,
+            content_hash=_hv_rc_package_hash(package),
+        )
+
+        self._validate_final_reconstruction_package_integrity(
+            package,
+            verify_live_sources=True,
+        )
+
+        old_artifact = self.reconstruction_package_artifact
+        old_history_len = len(
+            self.reconstruction_package_history
+        )
+
+        self.reconstruction_package_artifact = package
+        self.reconstruction_package_history.append(package)
+
+        try:
+            self.transition(
+                S.RECONSTRUCTION_PACKAGE_CONFIRMATION_REQUIRED,
+                actor,
+            )
+        except Exception:
+            self.reconstruction_package_artifact = old_artifact
+            del self.reconstruction_package_history[
+                old_history_len:
+            ]
+            raise
+
+        return package
+
+    def confirm_final_reconstruction_package(
+        self,
+        *,
+        actor: Actor,
+        package_content_hash: str,
+        confirmation_note: str,
+    ) -> FinalReconstructionPackage:
+        if actor is not Actor.HUMAN:
+            raise TransitionRejected(
+                "Only HUMAN can confirm Final Reconstruction Package."
+            )
+
+        if (
+            self.state
+            is not S.RECONSTRUCTION_PACKAGE_CONFIRMATION_REQUIRED
+        ):
+            raise TransitionRejected(
+                "Final Reconstruction confirmation is allowed only in "
+                "RECONSTRUCTION_PACKAGE_CONFIRMATION_REQUIRED."
+            )
+
+        package = self.reconstruction_package_artifact
+
+        if package is None:
+            raise TransitionRejected(
+                "No Final Reconstruction Package exists."
+            )
+
+        if package.status != "DRAFT":
+            raise TransitionRejected(
+                "Final Reconstruction Package is not awaiting "
+                "HUMAN confirmation."
+            )
+
+        if (
+            not isinstance(package_content_hash, str)
+            or package_content_hash.strip()
+            != package.content_hash
+        ):
+            raise TransitionRejected(
+                "HUMAN confirmation must reference the exact Final "
+                "Reconstruction Package hash."
+            )
+
+        if (
+            not isinstance(confirmation_note, str)
+            or len(confirmation_note.strip()) < 8
+        ):
+            raise TransitionRejected(
+                "Final Reconstruction confirmation must be explicit."
+            )
+
+        self._validate_final_reconstruction_package_integrity(
+            package,
+            verify_live_sources=True,
+        )
+
+        confirmed = _hv_rc_replace(
+            package,
+            status="HUMAN_CONFIRMED",
+            confirmed_by=Actor.HUMAN.value,
+            confirmed_at=_hv_rc_now(),
+            confirmed_content_hash=package.content_hash,
+            confirmation_note=confirmation_note.strip(),
+        )
+
+        self.reconstruction_package_artifact = confirmed
+        self.reconstruction_package_history.append(confirmed)
+
+        return confirmed
+
+    def lock_final_reconstruction_package(
+        self,
+        *,
+        actor: Actor,
+    ) -> FinalReconstructionPackage:
+        if actor is not Actor.SYSTEM:
+            raise TransitionRejected(
+                "Only SYSTEM can technically lock "
+                "Final Reconstruction Package."
+            )
+
+        if (
+            self.state
+            is not S.RECONSTRUCTION_PACKAGE_CONFIRMATION_REQUIRED
+        ):
+            raise TransitionRejected(
+                "Final Reconstruction technical lock requires "
+                "RECONSTRUCTION_PACKAGE_CONFIRMATION_REQUIRED."
+            )
+
+        package = self.reconstruction_package_artifact
+
+        if package is None:
+            raise TransitionRejected(
+                "Final Reconstruction technical lock requires package."
+            )
+
+        if (
+            package.status != "HUMAN_CONFIRMED"
+            or package.confirmed_by != Actor.HUMAN.value
+        ):
+            raise TransitionRejected(
+                "SYSTEM cannot lock Final Reconstruction Package "
+                "before explicit HUMAN confirmation."
+            )
+
+        self._validate_final_reconstruction_package_integrity(
+            package,
+            verify_live_sources=True,
+        )
+
+        if (
+            package.confirmed_content_hash
+            != package.content_hash
+        ):
+            raise TransitionRejected(
+                "Final Reconstruction content changed after "
+                "HUMAN confirmation."
+            )
+
+        self._reconstruction_package_lock_authorization_hash = (
+            package.content_hash
+        )
+
+        try:
+            self.transition(
+                S.RECONSTRUCTION_PACKAGE_READY,
+                actor,
+            )
+        finally:
+            self._reconstruction_package_lock_authorization_hash = None
+
+        locked = _hv_rc_replace(
+            package,
+            status="LOCKED",
+            locked_by=Actor.SYSTEM.value,
+            locked_at=_hv_rc_now(),
+        )
+
+        self.reconstruction_package_artifact = locked
+        self.reconstruction_package_history.append(locked)
+
+        return locked
+
+
     def _has_demo_positive_memory_evidence(self) -> bool:
         if self.retrieval_outcome != RETRIEVAL_CANDIDATES_FOUND:
             return False
@@ -4816,6 +5600,109 @@ class SystemOrchestrator:
             raise TransitionRejected(
                 "NO_RELEVANT_MEMORY requires explicit HUMAN resolution "
                 "through confirm_no_relevant_memory()."
+            )
+
+        # Final Reconstruction Package must exist before
+        # ORCHESTRATOR may open the HUMAN confirmation gate.
+        if (
+            source is S.RECONSTRUCTION_PACKAGE_PREPARATION
+            and target
+            is S.RECONSTRUCTION_PACKAGE_CONFIRMATION_REQUIRED
+        ):
+            package = self.reconstruction_package_artifact
+
+            if package is None or package.status != "DRAFT":
+                raise TransitionRejected(
+                    "Reconstruction confirmation gate requires a "
+                    "persisted DRAFT Final Reconstruction Package."
+                )
+
+            self._validate_final_reconstruction_package_integrity(
+                package,
+                verify_live_sources=True,
+            )
+
+        # HUMAN confirms cognition/content; SYSTEM alone executes
+        # the technical READY lock through the canonical method.
+        if (
+            source
+            is S.RECONSTRUCTION_PACKAGE_CONFIRMATION_REQUIRED
+            and target is S.RECONSTRUCTION_PACKAGE_READY
+        ):
+            if actor is not Actor.SYSTEM:
+                raise TransitionRejected(
+                    "RECONSTRUCTION_PACKAGE_READY requires SYSTEM."
+                )
+
+            package = self.reconstruction_package_artifact
+
+            if package is None:
+                raise TransitionRejected(
+                    "Reconstruction technical lock requires package."
+                )
+
+            if (
+                package.status != "HUMAN_CONFIRMED"
+                or package.confirmed_by
+                != Actor.HUMAN.value
+            ):
+                raise TransitionRejected(
+                    "Reconstruction technical lock requires prior "
+                    "explicit HUMAN confirmation."
+                )
+
+            self._validate_final_reconstruction_package_integrity(
+                package,
+                verify_live_sources=True,
+            )
+
+            if (
+                package.confirmed_content_hash
+                != package.content_hash
+            ):
+                raise TransitionRejected(
+                    "Reconstruction technical lock requires the exact "
+                    "HUMAN-confirmed package."
+                )
+
+            if (
+                self._reconstruction_package_lock_authorization_hash
+                != package.content_hash
+            ):
+                raise TransitionRejected(
+                    "Reconstruction technical lock must be executed "
+                    "through lock_final_reconstruction_package()."
+                )
+
+        # Builder Reconstruction can start only from the exact
+        # HUMAN-confirmed and SYSTEM-locked package.
+        if (
+            source is S.RECONSTRUCTION_PACKAGE_READY
+            and target is S.RECONSTRUCTION_RUNNING
+        ):
+            package = self.reconstruction_package_artifact
+
+            if package is None:
+                raise TransitionRejected(
+                    "Reconstruction cannot run without Final "
+                    "Reconstruction Package."
+                )
+
+            if (
+                package.status != "LOCKED"
+                or package.confirmed_by
+                != Actor.HUMAN.value
+                or package.locked_by
+                != Actor.SYSTEM.value
+            ):
+                raise TransitionRejected(
+                    "Reconstruction requires a HUMAN-confirmed, "
+                    "SYSTEM-locked package."
+                )
+
+            self._validate_final_reconstruction_package_integrity(
+                package,
+                verify_live_sources=True,
             )
 
         if (
