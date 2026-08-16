@@ -72,10 +72,6 @@ HUMAN_AUTHORITY_TRANSITIONS = frozenset({
         S.MANUAL_TRANSFER_PREPARATION,
     ),
 
-    (
-        S.TRANSFER_CONFIRMATION_REQUIRED,
-        S.TRANSFER_PACKAGE_LOCKED,
-    ),
 
     (
         S.MEMORY_RETRIEVAL_RUNNING,
@@ -137,6 +133,7 @@ AGENT_OWNED_TRANSITIONS = {
     (S.CRITIC_REVIEW_GENERATED, S.CONFLICT_SPACE_READY): Actor.SYSTEM,
     (S.CONFLICT_SPACE_READY, S.HUMAN_CRITIC_SELECTION): Actor.ORCHESTRATOR,
     (S.CRITIC_CLARIFICATION_REQUIRED, S.CRITIC_RUNNING): Actor.ORCHESTRATOR,
+    (S.TRANSFER_CONFIRMATION_REQUIRED, S.TRANSFER_PACKAGE_LOCKED): Actor.SYSTEM,
     (S.TRANSFER_PACKAGE_LOCKED, S.MEMORY_RETRIEVAL_READY): Actor.ORCHESTRATOR,
     (S.CRITIC_RUNNING, S.CRITIC_REVIEW_GENERATED): Actor.CRITIC_AI,
     (S.MEMORY_RETRIEVAL_READY, S.MEMORY_RETRIEVAL_RUNNING): Actor.ORCHESTRATOR,
@@ -511,6 +508,186 @@ class HumanCriticSelection:
     created_revision: int
 
 
+
+import dataclasses as _hv_dc
+import hashlib as _hv_hashlib
+import json as _hv_json
+import uuid as _hv_uuid
+from datetime import datetime as _hv_datetime, timezone as _hv_timezone
+
+
+def _hv_manual_transfer_now() -> str:
+    return _hv_datetime.now(_hv_timezone.utc).isoformat()
+
+
+def _hv_manual_transfer_scalar(value) -> str:
+    if hasattr(value, "value"):
+        value = value.value
+    if value is None:
+        return ""
+    return str(value)
+
+
+def _hv_manual_transfer_as_data(value):
+    if _hv_dc.is_dataclass(value):
+        return _hv_dc.asdict(value)
+    if isinstance(value, dict):
+        return {
+            str(k): _hv_manual_transfer_as_data(v)
+            for k, v in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_hv_manual_transfer_as_data(v) for v in value]
+    if hasattr(value, "value"):
+        return value.value
+    return value
+
+
+def _hv_manual_transfer_collect_strings(value) -> set[str]:
+    values: set[str] = set()
+
+    if isinstance(value, dict):
+        for item in value.values():
+            values.update(_hv_manual_transfer_collect_strings(item))
+        return values
+
+    if isinstance(value, (list, tuple)):
+        for item in value:
+            values.update(_hv_manual_transfer_collect_strings(item))
+        return values
+
+    scalar = _hv_manual_transfer_scalar(value)
+    if scalar:
+        values.add(scalar)
+    return values
+
+
+def _hv_manual_transfer_find_id_containers(value, source_id: str) -> list[dict]:
+    found: list[dict] = []
+
+    if isinstance(value, dict):
+        direct_scalars = {
+            _hv_manual_transfer_scalar(v)
+            for v in value.values()
+            if not isinstance(v, (dict, list, tuple))
+        }
+        if source_id in direct_scalars:
+            found.append(value)
+
+        for child in value.values():
+            found.extend(
+                _hv_manual_transfer_find_id_containers(child, source_id)
+            )
+
+    elif isinstance(value, (list, tuple)):
+        for child in value:
+            found.extend(
+                _hv_manual_transfer_find_id_containers(child, source_id)
+            )
+
+    return found
+
+
+@dataclass(frozen=True)
+class ManualTransferItem:
+    item_id: str
+    source_object_type: str
+    source_object_id: str
+    source_actor_type: str
+    transfer_type: str
+    original_content: str
+    selected_fragment: str
+    human_transformed_content: str
+    reason: str
+    expected_effect: str
+    conditions: str
+    destination: str
+    target_version_label: str
+    status: str
+    created_at: str
+    content_hash: str
+
+
+@dataclass(frozen=True)
+class ManualTransferPackage:
+    package_id: str
+    session_id: str
+    branch_id: str
+    cycle_id: str
+    package_type: str
+    version_number: int
+    source_version_id: str
+    conflict_space_id: str
+    human_selection_id: str
+    target_type: str
+    target_version_label: str
+    items: tuple[ManualTransferItem, ...]
+    status: str
+    confirmed_by: str
+    confirmed_at: str
+    confirmed_content_hash: str
+    human_confirmation_note: str
+    locked_by: str
+    locked_at: str
+    content_hash: str
+    created_at: str
+
+
+def _hv_manual_transfer_item_hash(item: ManualTransferItem) -> str:
+    payload = {
+        "source_object_type": item.source_object_type,
+        "source_object_id": item.source_object_id,
+        "source_actor_type": item.source_actor_type,
+        "transfer_type": item.transfer_type,
+        "original_content": item.original_content,
+        "selected_fragment": item.selected_fragment,
+        "human_transformed_content": item.human_transformed_content,
+        "reason": item.reason,
+        "expected_effect": item.expected_effect,
+        "conditions": item.conditions,
+        "destination": item.destination,
+        "target_version_label": item.target_version_label,
+        "status": item.status,
+    }
+    raw = _hv_json.dumps(
+        payload,
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    return _hv_hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _hv_manual_transfer_package_hash(
+    package: ManualTransferPackage,
+) -> str:
+    payload = {
+        "session_id": package.session_id,
+        "branch_id": package.branch_id,
+        "cycle_id": package.cycle_id,
+        "package_type": package.package_type,
+        "source_version_id": package.source_version_id,
+        "conflict_space_id": package.conflict_space_id,
+        "human_selection_id": package.human_selection_id,
+        "target_type": package.target_type,
+        "target_version_label": package.target_version_label,
+        "items": [
+            {
+                "item_id": item.item_id,
+                "content_hash": item.content_hash,
+            }
+            for item in package.items
+        ],
+    }
+    raw = _hv_json.dumps(
+        payload,
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    )
+    return _hv_hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
 @dataclass
 class SystemOrchestrator:
     state: S = S.SESSION_CREATED
@@ -530,6 +707,13 @@ class SystemOrchestrator:
     conflict_space_history: list[ConflictSpace] = field(default_factory=list)
     human_critic_selection_artifact: HumanCriticSelection | None = None
     human_critic_selection_history: list[HumanCriticSelection] = field(default_factory=list)
+    manual_transfer_artifact: ManualTransferPackage | None = None
+    manual_transfer_history: list[ManualTransferPackage] = field(default_factory=list)
+    _manual_transfer_lock_authorization_hash: str | None = field(
+        default=None,
+        repr=False,
+    )
+
     vf_locked_version_id: str | None = None
     vf_locked_content_hash: str | None = None
     retrieval_outcome: str | None = None
@@ -2483,6 +2667,619 @@ class SystemOrchestrator:
         self.vf_precheck_reason = reason.strip()
         self.vf_precheck_revision = self.revision
 
+
+    def _manual_transfer_source_artifacts(self) -> tuple[object, ...]:
+        names = (
+            "human_direction_artifact",
+            "human_response_artifact",
+            "critic_review_artifact",
+            "conflict_space_artifact",
+            "human_critic_selection_artifact",
+        )
+        return tuple(
+            artifact
+            for name in names
+            if (artifact := getattr(self, name, None)) is not None
+        )
+
+    def _manual_transfer_source_version_id(self) -> str:
+        versions = getattr(self, "result_versions", {}) or {}
+
+        candidates = []
+        if isinstance(versions, dict):
+            if "V1" in versions:
+                candidates.append(versions["V1"])
+            candidates.extend(
+                value
+                for key, value in versions.items()
+                if key != "V1"
+            )
+
+        for candidate in candidates:
+            data = _hv_manual_transfer_as_data(candidate)
+            if not isinstance(data, dict):
+                continue
+
+            label = _hv_manual_transfer_scalar(
+                data.get("version_label")
+                or data.get("label")
+                or data.get("version")
+            )
+            if label and label != "V1":
+                continue
+
+            for key in (
+                "version_id",
+                "result_version_id",
+                "version_uuid",
+                "id",
+            ):
+                value = _hv_manual_transfer_scalar(data.get(key))
+                if value:
+                    return value
+
+        return ""
+
+    def _manual_transfer_validate_source(
+        self,
+        *,
+        source_object_type: str,
+        source_object_id: str,
+        source_actor_type: str,
+        original_content: str,
+        selected_fragment: str,
+        conditions: str,
+    ) -> None:
+        source_type = source_object_type.strip().upper()
+
+        allowed_source_types = {
+            "HUMAN_DIRECTION",
+            "HUMAN_COGNITIVE_RESPONSE",
+            "CRITICISM",
+            "CONFLICT",
+            "HUMAN_SELECTION",
+            "VERIFICATION_RESULT",
+        }
+
+        if source_type not in allowed_source_types:
+            raise TransitionRejected(
+                f"Manual Transfer source type {source_type!r} is not authorized."
+            )
+
+        if "MEMORY" in source_type:
+            raise TransitionRejected(
+                "Memory cannot enter the preliminary Manual Transfer package."
+            )
+
+        artifacts = self._manual_transfer_source_artifacts()
+        source_containers: list[dict] = []
+
+        for artifact in artifacts:
+            data = _hv_manual_transfer_as_data(artifact)
+            source_containers.extend(
+                _hv_manual_transfer_find_id_containers(
+                    data,
+                    source_object_id,
+                )
+            )
+
+        if not source_containers:
+            raise TransitionRejected(
+                "Manual Transfer source object is not present in canonical artifacts."
+            )
+
+        source_strings: set[str] = set()
+        for container in source_containers:
+            source_strings.update(
+                _hv_manual_transfer_collect_strings(container)
+            )
+
+        if original_content not in source_strings:
+            raise TransitionRejected(
+                "Manual Transfer original content does not match the canonical source."
+            )
+
+        if selected_fragment not in original_content:
+            raise TransitionRejected(
+                "Selected fragment must be contained in the original content."
+            )
+
+        actor_value = source_actor_type.strip()
+        actor_variants = {
+            actor_value,
+            actor_value.upper(),
+            f"Actor.{actor_value.upper()}",
+        }
+
+        if not actor_variants.intersection(source_strings):
+            # Conflict Space can legitimately preserve positions from
+            # multiple actors. For all other objects provenance must be
+            # directly observable in the source container.
+            if source_type != "CONFLICT":
+                raise TransitionRejected(
+                    "Manual Transfer source actor/provenance does not match "
+                    "the canonical source."
+                )
+
+        if source_type == "CRITICISM":
+            selection = getattr(
+                self,
+                "human_critic_selection_artifact",
+                None,
+            )
+            if selection is None:
+                raise TransitionRejected(
+                    "Criticism cannot transfer without HUMAN selection."
+                )
+
+            selection_data = _hv_manual_transfer_as_data(selection)
+            decision_containers = (
+                _hv_manual_transfer_find_id_containers(
+                    selection_data,
+                    source_object_id,
+                )
+            )
+
+            if not decision_containers:
+                raise TransitionRejected(
+                    "Criticism is not covered by the current HUMAN selection."
+                )
+
+            decisions = set()
+            for container in decision_containers:
+                for key in ("decision", "status", "selection"):
+                    if key in container:
+                        decisions.add(
+                            _hv_manual_transfer_scalar(
+                                container[key]
+                            ).upper()
+                        )
+
+            transferable = {
+                "ACCEPTED",
+                "PARTIALLY_ACCEPTED",
+                "TRANSFER_APPROVED",
+                "KEEP_AS_UNRESOLVED",
+                "NEEDS_EXTERNAL_VERIFICATION",
+            }
+
+            if not decisions.intersection(transferable):
+                raise TransitionRejected(
+                    "Criticism is not HUMAN-authorized for preliminary transfer."
+                )
+
+            if (
+                "NEEDS_EXTERNAL_VERIFICATION" in decisions
+                and not conditions.strip()
+            ):
+                raise TransitionRejected(
+                    "Externally unverified criticism requires a transfer condition."
+                )
+
+    def _manual_transfer_validate_integrity(
+        self,
+        package: ManualTransferPackage,
+    ) -> None:
+        if not package.items:
+            raise TransitionRejected(
+                "Manual Transfer package cannot be empty."
+            )
+
+        for item in package.items:
+            expected = _hv_manual_transfer_item_hash(item)
+            if item.content_hash != expected:
+                raise TransitionRejected(
+                    f"Manual Transfer item integrity failed: {item.item_id}"
+                )
+
+        expected_package_hash = _hv_manual_transfer_package_hash(
+            package
+        )
+        if package.content_hash != expected_package_hash:
+            raise TransitionRejected(
+                "Manual Transfer package integrity check failed."
+            )
+
+    def open_manual_transfer(
+        self,
+        actor: Actor,
+    ) -> None:
+        if actor is not Actor.HUMAN:
+            raise TransitionRejected(
+                "Only HUMAN can enter Manual Transfer editing."
+            )
+        if self.state is not S.MANUAL_TRANSFER_PREPARATION:
+            raise TransitionRejected(
+                "Manual Transfer can start only from "
+                "MANUAL_TRANSFER_PREPARATION."
+            )
+
+        self.transition(
+            S.MANUAL_TRANSFER_IN_PROGRESS,
+            actor,
+        )
+
+    def build_manual_transfer_package(
+        self,
+        *,
+        actor: Actor,
+        items: list[dict],
+        source_version_id: str = "",
+        target_version_label: str = "V2",
+        branch_id: str = "",
+        cycle_id: str = "",
+    ) -> ManualTransferPackage:
+        if actor is not Actor.HUMAN:
+            raise TransitionRejected(
+                "Only HUMAN can construct the Manual Transfer package."
+            )
+
+        if self.state is not S.MANUAL_TRANSFER_IN_PROGRESS:
+            raise TransitionRejected(
+                "Manual Transfer package can be constructed only in "
+                "MANUAL_TRANSFER_IN_PROGRESS."
+            )
+
+        if self.conflict_space_artifact is None:
+            raise TransitionRejected(
+                "Conflict Space is required before Manual Transfer."
+            )
+
+        if self.human_critic_selection_artifact is None:
+            raise TransitionRejected(
+                "HUMAN Critic Selection is required before Manual Transfer."
+            )
+
+        if not isinstance(items, list) or not items:
+            raise TransitionRejected(
+                "Manual Transfer requires at least one HUMAN-selected item."
+            )
+
+        if not target_version_label.strip():
+            raise TransitionRejected(
+                "Manual Transfer target version label is required."
+            )
+
+        transfer_types = {
+            "FULL",
+            "PARTIAL",
+            "CONDITIONAL",
+            "TRANSFORMED",
+            "UNRESOLVED",
+        }
+
+        built_items: list[ManualTransferItem] = []
+        duplicate_keys: set[tuple[str, str, str, str]] = set()
+
+        for index, raw in enumerate(items, start=1):
+            if not isinstance(raw, dict):
+                raise TransitionRejected(
+                    f"Manual Transfer item {index} must be a mapping."
+                )
+
+            def required(name: str) -> str:
+                value = raw.get(name, "")
+                if not isinstance(value, str) or not value.strip():
+                    raise TransitionRejected(
+                        f"Manual Transfer item {index}: "
+                        f"{name} is required."
+                    )
+                return value.strip()
+
+            source_object_type = required("source_object_type")
+            source_object_id = required("source_object_id")
+            source_actor_type = required("source_actor_type")
+            transfer_type = required("transfer_type").upper()
+            original_content = required("original_content")
+            selected_fragment = required("selected_fragment")
+            reason = required("reason")
+            expected_effect = required("expected_effect")
+            destination = required("destination")
+
+            human_transformed_content = raw.get(
+                "human_transformed_content",
+                "",
+            )
+            conditions = raw.get("conditions", "")
+
+            if not isinstance(human_transformed_content, str):
+                raise TransitionRejected(
+                    f"Manual Transfer item {index}: "
+                    "human_transformed_content must be text."
+                )
+            if not isinstance(conditions, str):
+                raise TransitionRejected(
+                    f"Manual Transfer item {index}: "
+                    "conditions must be text."
+                )
+
+            human_transformed_content = (
+                human_transformed_content.strip()
+            )
+            conditions = conditions.strip()
+
+            if transfer_type not in transfer_types:
+                raise TransitionRejected(
+                    f"Manual Transfer item {index}: "
+                    f"unsupported transfer_type {transfer_type!r}."
+                )
+
+            if (
+                transfer_type == "CONDITIONAL"
+                and not conditions
+            ):
+                raise TransitionRejected(
+                    f"Manual Transfer item {index}: "
+                    "CONDITIONAL transfer requires conditions."
+                )
+
+            if (
+                transfer_type == "TRANSFORMED"
+                and not human_transformed_content
+            ):
+                raise TransitionRejected(
+                    f"Manual Transfer item {index}: "
+                    "TRANSFORMED transfer requires HUMAN transformed content."
+                )
+
+            self._manual_transfer_validate_source(
+                source_object_type=source_object_type,
+                source_object_id=source_object_id,
+                source_actor_type=source_actor_type,
+                original_content=original_content,
+                selected_fragment=selected_fragment,
+                conditions=conditions,
+            )
+
+            duplicate_key = (
+                source_object_type.upper(),
+                source_object_id,
+                selected_fragment,
+                destination,
+            )
+            if duplicate_key in duplicate_keys:
+                raise TransitionRejected(
+                    f"Duplicate Manual Transfer item at position {index}."
+                )
+            duplicate_keys.add(duplicate_key)
+
+            item = ManualTransferItem(
+                item_id=str(_hv_uuid.uuid4()),
+                source_object_type=source_object_type.upper(),
+                source_object_id=source_object_id,
+                source_actor_type=source_actor_type,
+                transfer_type=transfer_type,
+                original_content=original_content,
+                selected_fragment=selected_fragment,
+                human_transformed_content=human_transformed_content,
+                reason=reason,
+                expected_effect=expected_effect,
+                conditions=conditions,
+                destination=destination,
+                target_version_label=target_version_label.strip(),
+                status="TRANSFER_APPROVED",
+                created_at=_hv_manual_transfer_now(),
+                content_hash="",
+            )
+
+            item = _hv_dc.replace(
+                item,
+                content_hash=_hv_manual_transfer_item_hash(item),
+            )
+            built_items.append(item)
+
+        canonical_source_version_id = self._manual_transfer_source_version_id()
+
+        if not canonical_source_version_id:
+            raise TransitionRejected(
+                "Manual Transfer requires an exact canonical V1 version identifier."
+            )
+
+        supplied_source_version_id = source_version_id.strip()
+
+        if (
+            supplied_source_version_id
+            and supplied_source_version_id != canonical_source_version_id
+        ):
+            raise TransitionRejected(
+                "Manual Transfer source_version_id does not match canonical V1."
+            )
+
+        resolved_source_version_id = canonical_source_version_id
+
+        space_id = _hv_manual_transfer_scalar(
+            getattr(self.conflict_space_artifact, "space_id", "")
+        )
+        selection_id = _hv_manual_transfer_scalar(
+            getattr(
+                self.human_critic_selection_artifact,
+                "selection_id",
+                "",
+            )
+        )
+        session_id = _hv_manual_transfer_scalar(
+            getattr(self, "session_id", "")
+        )
+
+        if not session_id or not space_id or not selection_id:
+            raise TransitionRejected(
+                "Manual Transfer canonical session/Conflict Space/"
+                "HUMAN Selection linkage is incomplete."
+            )
+
+        package = ManualTransferPackage(
+            package_id="",
+            session_id=session_id,
+            branch_id=branch_id.strip(),
+            cycle_id=cycle_id.strip(),
+            package_type="PRELIMINARY_TRANSFER",
+            version_number=0,
+            source_version_id=resolved_source_version_id,
+            conflict_space_id=space_id,
+            human_selection_id=selection_id,
+            target_type="MEMORY_RETRIEVAL_CONTEXT",
+            target_version_label=target_version_label.strip(),
+            items=tuple(built_items),
+            status="DRAFT",
+            confirmed_by="",
+            confirmed_at="",
+            confirmed_content_hash="",
+            human_confirmation_note="",
+            locked_by="",
+            locked_at="",
+            content_hash="",
+            created_at=_hv_manual_transfer_now(),
+        )
+
+        package = _hv_dc.replace(
+            package,
+            content_hash=_hv_manual_transfer_package_hash(package),
+        )
+
+        # Transition occurs only after every validation succeeded.
+        self.transition(
+            S.TRANSFER_CONFIRMATION_REQUIRED,
+            actor,
+        )
+
+        self.manual_transfer_artifact = package
+        self.manual_transfer_history.append(package)
+        return package
+
+    def confirm_manual_transfer_package(
+        self,
+        *,
+        actor: Actor,
+        package_content_hash: str,
+        confirmation_note: str,
+    ) -> ManualTransferPackage:
+        if actor is not Actor.HUMAN:
+            raise TransitionRejected(
+                "Only HUMAN can confirm the preliminary Manual Transfer package."
+            )
+
+        if self.state is not S.TRANSFER_CONFIRMATION_REQUIRED:
+            raise TransitionRejected(
+                "Manual Transfer confirmation is allowed only in "
+                "TRANSFER_CONFIRMATION_REQUIRED."
+            )
+
+        package = self.manual_transfer_artifact
+        if package is None:
+            raise TransitionRejected(
+                "No Manual Transfer package exists to confirm."
+            )
+
+        if package.status != "DRAFT":
+            raise TransitionRejected(
+                "Manual Transfer package is not awaiting HUMAN confirmation."
+            )
+
+        if not isinstance(confirmation_note, str):
+            raise TransitionRejected(
+                "HUMAN confirmation note must be text."
+            )
+
+        confirmation_note = confirmation_note.strip()
+        if len(confirmation_note) < 8:
+            raise TransitionRejected(
+                "HUMAN confirmation must be explicit, not silence or "
+                "a generic implicit acceptance."
+            )
+
+        self._manual_transfer_validate_integrity(package)
+
+        if package_content_hash.strip() != package.content_hash:
+            raise TransitionRejected(
+                "HUMAN confirmation does not reference the exact package hash."
+            )
+
+        confirmed = _hv_dc.replace(
+            package,
+            status="HUMAN_CONFIRMED",
+            confirmed_by=Actor.HUMAN.value,
+            confirmed_at=_hv_manual_transfer_now(),
+            confirmed_content_hash=package.content_hash,
+            human_confirmation_note=confirmation_note,
+        )
+
+        self.manual_transfer_artifact = confirmed
+        self.manual_transfer_history.append(confirmed)
+        return confirmed
+
+    def lock_manual_transfer_package(
+        self,
+        *,
+        actor: Actor,
+    ) -> ManualTransferPackage:
+        if actor is not Actor.SYSTEM:
+            raise TransitionRejected(
+                "Only SYSTEM can execute the technical Manual Transfer lock."
+            )
+
+        if self.state is not S.TRANSFER_CONFIRMATION_REQUIRED:
+            raise TransitionRejected(
+                "SYSTEM lock is allowed only after HUMAN confirmation "
+                "at TRANSFER_CONFIRMATION_REQUIRED."
+            )
+
+        package = self.manual_transfer_artifact
+        if package is None:
+            raise TransitionRejected(
+                "No Manual Transfer package exists to lock."
+            )
+
+        if package.status != "HUMAN_CONFIRMED":
+            raise TransitionRejected(
+                "SYSTEM cannot lock Manual Transfer without explicit "
+                "HUMAN confirmation."
+            )
+
+        if package.confirmed_by != Actor.HUMAN.value:
+            raise TransitionRejected(
+                "Manual Transfer confirmation provenance is not HUMAN."
+            )
+
+        self._manual_transfer_validate_integrity(package)
+
+        if package.confirmed_content_hash != package.content_hash:
+            raise TransitionRejected(
+                "Manual Transfer content changed after HUMAN confirmation."
+            )
+
+        locked_versions = [
+            snapshot.version_number
+            for snapshot in self.manual_transfer_history
+            if snapshot.status == "LOCKED"
+            and snapshot.version_number > 0
+        ]
+        next_version = max(locked_versions, default=0) + 1
+
+        locked = _hv_dc.replace(
+            package,
+            package_id=str(_hv_uuid.uuid4()),
+            version_number=next_version,
+            status="LOCKED",
+            locked_by=Actor.SYSTEM.value,
+            locked_at=_hv_manual_transfer_now(),
+        )
+
+        # SYSTEM performs only the technical lock.
+        # A one-shot authorization binds transition() to this canonical
+        # method and to the exact HUMAN-confirmed package hash.
+        self._manual_transfer_lock_authorization_hash = package.content_hash
+        try:
+            self.transition(
+                S.TRANSFER_PACKAGE_LOCKED,
+                actor,
+            )
+        finally:
+            self._manual_transfer_lock_authorization_hash = None
+
+        self.manual_transfer_artifact = locked
+        self.manual_transfer_history.append(locked)
+        return locked
+
     def _has_demo_positive_memory_evidence(self) -> bool:
         if self.retrieval_outcome != RETRIEVAL_CANDIDATES_FOUND:
             return False
@@ -2729,6 +3526,58 @@ class SystemOrchestrator:
                 f"Transition not allowed: "
                 f"{source.value} -> {target.value}"
             )
+
+        # Manual Transfer: SYSTEM owns the technical lock, but SYSTEM
+        # may cross this transition only after HUMAN confirmed the exact
+        # preliminary package. Direct transition() calls cannot bypass
+        # the HUMAN confirmation contract.
+        if (
+            source is S.TRANSFER_CONFIRMATION_REQUIRED
+            and target is S.TRANSFER_PACKAGE_LOCKED
+        ):
+            if actor is not Actor.SYSTEM:
+                raise TransitionRejected(
+                    "Manual Transfer technical lock requires SYSTEM."
+                )
+
+            package = self.manual_transfer_artifact
+
+            if package is None:
+                raise TransitionRejected(
+                    "Manual Transfer technical lock requires the exact "
+                    "HUMAN-confirmed package."
+                )
+
+            if package.status != "HUMAN_CONFIRMED":
+                raise TransitionRejected(
+                    "Manual Transfer technical lock requires prior "
+                    "explicit HUMAN confirmation."
+                )
+
+            if package.confirmed_by != Actor.HUMAN.value:
+                raise TransitionRejected(
+                    "Manual Transfer confirmation provenance must be HUMAN."
+                )
+
+            self._manual_transfer_validate_integrity(package)
+
+            if (
+                not package.confirmed_content_hash
+                or package.confirmed_content_hash != package.content_hash
+            ):
+                raise TransitionRejected(
+                    "Manual Transfer technical lock requires the exact "
+                    "HUMAN-confirmed package."
+                )
+
+            if (
+                self._manual_transfer_lock_authorization_hash
+                != package.content_hash
+            ):
+                raise TransitionRejected(
+                    "Manual Transfer technical lock must be executed through "
+                    "lock_manual_transfer_package()."
+                )
 
         if (
             (source, target) in HUMAN_AUTHORITY_TRANSITIONS
