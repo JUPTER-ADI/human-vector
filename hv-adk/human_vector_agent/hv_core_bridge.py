@@ -546,3 +546,319 @@ def record_critic_review_from_state(
         "criticism_count": len(review.criticisms),
         "final_authority": "HUMAN",
     }
+
+
+def prepare_builder_vn_reconstruction(
+    tool_context: ToolContext,
+) -> dict:
+    """
+    Bind the exact HUMAN-confirmed, SYSTEM-locked Final Reconstruction
+    Package to ADK session state and open Builder Reconstruction.
+
+    This function performs no HUMAN cognitive act.
+    """
+    if _orchestrator.state is not S.RECONSTRUCTION_PACKAGE_READY:
+        return {
+            "ok": False,
+            "state": _orchestrator.state.value,
+            "reason": (
+                "Builder Vn preparation requires "
+                "RECONSTRUCTION_PACKAGE_READY."
+            ),
+            "final_authority": "HUMAN",
+        }
+
+    package = _orchestrator.reconstruction_package_artifact
+
+    if package is None:
+        return {
+            "ok": False,
+            "state": _orchestrator.state.value,
+            "reason": "Final Reconstruction Package is missing.",
+            "final_authority": "HUMAN",
+        }
+
+    if (
+        package.status != "LOCKED"
+        or package.confirmed_by != Actor.HUMAN.value
+        or package.locked_by != Actor.SYSTEM.value
+    ):
+        return {
+            "ok": False,
+            "state": _orchestrator.state.value,
+            "reason": (
+                "Builder Vn requires the exact HUMAN-confirmed, "
+                "SYSTEM-locked Final Reconstruction Package."
+            ),
+            "final_authority": "HUMAN",
+        }
+
+    try:
+        _orchestrator._validate_final_reconstruction_package_integrity(
+            package,
+            verify_live_sources=True,
+        )
+    except (TransitionRejected, ValueError, TypeError) as exc:
+        return {
+            "ok": False,
+            "state": _orchestrator.state.value,
+            "reason": str(exc),
+            "final_authority": "HUMAN",
+        }
+
+    package_state = asdict(package)
+
+    try:
+        _orchestrator.transition(
+            S.RECONSTRUCTION_RUNNING,
+            Actor.ORCHESTRATOR,
+            reason=(
+                "Open Builder Vn execution from exact locked "
+                "Final Reconstruction Package."
+            ),
+        )
+    except TransitionRejected as exc:
+        return {
+            "ok": False,
+            "state": _orchestrator.state.value,
+            "reason": str(exc),
+            "final_authority": "HUMAN",
+        }
+
+    # State mutation happens only after CORE accepted the transition.
+    tool_context.state["hv_builder_vn_reconstruction_package"] = (
+        package_state
+    )
+    tool_context.state[
+        "hv_builder_vn_reconstruction_package_hash"
+    ] = package.content_hash
+    tool_context.state["hv_builder_vn_input_source"] = (
+        "LOCKED_FINAL_RECONSTRUCTION_PACKAGE"
+    )
+
+    # A previous/stale model output must never authorize a new Vn.
+    tool_context.state.pop("hv_builder_vn_output", None)
+    tool_context.state.pop("hv_builder_vn_recorded", None)
+
+    return {
+        "ok": True,
+        "state": _orchestrator.state.value,
+        "reconstruction_package_id": package.package_id,
+        "reconstruction_package_revision": package.package_revision,
+        "reconstruction_package_hash": package.content_hash,
+        "builder_input_source":
+            "LOCKED_FINAL_RECONSTRUCTION_PACKAGE",
+        "builder_output_key": "hv_builder_vn_output",
+        "final_authority": "HUMAN",
+    }
+
+
+def _next_builder_vn_label() -> str:
+    import re
+
+    numbers = []
+
+    for version in _orchestrator.result_versions.values():
+        label = getattr(version, "version_label", "")
+
+        if not isinstance(label, str):
+            continue
+
+        match = re.fullmatch(r"V([1-9][0-9]*)", label.strip())
+
+        if match:
+            numbers.append(int(match.group(1)))
+
+    next_number = max(numbers, default=1) + 1
+
+    if next_number < 2:
+        next_number = 2
+
+    return f"V{next_number}"
+
+
+def record_builder_vn_from_state(
+    tool_context: ToolContext,
+) -> dict:
+    """
+    Record the exact Gemini Builder Vn output from ADK session state.
+
+    The root agent cannot provide or rewrite the output as an argument.
+    """
+    import hashlib
+
+    if _orchestrator.state is not S.RECONSTRUCTION_RUNNING:
+        return {
+            "ok": False,
+            "state": _orchestrator.state.value,
+            "reason": (
+                "Builder Vn recording requires RECONSTRUCTION_RUNNING."
+            ),
+            "final_authority": "HUMAN",
+        }
+
+    package = _orchestrator.reconstruction_package_artifact
+
+    if package is None:
+        return {
+            "ok": False,
+            "state": _orchestrator.state.value,
+            "reason": "Final Reconstruction Package is missing.",
+            "final_authority": "HUMAN",
+        }
+
+    if (
+        package.status != "LOCKED"
+        or package.confirmed_by != Actor.HUMAN.value
+        or package.locked_by != Actor.SYSTEM.value
+    ):
+        return {
+            "ok": False,
+            "state": _orchestrator.state.value,
+            "reason": (
+                "Builder Vn recording requires the locked "
+                "Final Reconstruction Package."
+            ),
+            "final_authority": "HUMAN",
+        }
+
+    try:
+        _orchestrator._validate_final_reconstruction_package_integrity(
+            package,
+            verify_live_sources=True,
+        )
+    except (TransitionRejected, ValueError, TypeError) as exc:
+        return {
+            "ok": False,
+            "state": _orchestrator.state.value,
+            "reason": str(exc),
+            "final_authority": "HUMAN",
+        }
+
+    expected_package = asdict(package)
+
+    adk_package = tool_context.state.get(
+        "hv_builder_vn_reconstruction_package"
+    )
+
+    adk_package_hash = tool_context.state.get(
+        "hv_builder_vn_reconstruction_package_hash"
+    )
+
+    if (
+        adk_package != expected_package
+        or adk_package_hash != package.content_hash
+    ):
+        return {
+            "ok": False,
+            "state": _orchestrator.state.value,
+            "reason": (
+                "ADK Builder Vn input does not match the exact locked "
+                "Final Reconstruction Package."
+            ),
+            "final_authority": "HUMAN",
+        }
+
+    raw_output = tool_context.state.get("hv_builder_vn_output")
+
+    if not isinstance(raw_output, str) or not raw_output.strip():
+        return {
+            "ok": False,
+            "state": _orchestrator.state.value,
+            "reason": (
+                "Exact Builder Vn output is missing from "
+                "hv_builder_vn_output."
+            ),
+            "builder_output_key": "hv_builder_vn_output",
+            "final_authority": "HUMAN",
+        }
+
+    if tool_context.state.get("hv_builder_vn_recorded"):
+        return {
+            "ok": False,
+            "state": _orchestrator.state.value,
+            "reason": "Builder Vn output was already recorded.",
+            "final_authority": "HUMAN",
+        }
+
+    version_label = _next_builder_vn_label()
+
+    core_session_id = str(
+        _orchestrator.session_id or package.session_id
+    )
+
+    try:
+        UUID(core_session_id)
+    except (ValueError, TypeError, AttributeError):
+        return {
+            "ok": False,
+            "state": _orchestrator.state.value,
+            "reason": "Builder Vn requires a valid session UUID.",
+            "final_authority": "HUMAN",
+        }
+
+    before_versions = dict(_orchestrator.result_versions)
+
+    try:
+        _orchestrator.transition(
+            S.VN_GENERATED,
+            Actor.BUILDER_AI,
+            reason=(
+                f"Builder AI generated exact reconstruction "
+                f"{version_label}."
+            ),
+        )
+
+        result = _orchestrator.record_result_version(
+            session_id=core_session_id,
+            version_label=version_label,
+            content=raw_output,
+            actor=Actor.BUILDER_AI,
+        )
+
+        exact_hash = hashlib.sha256(
+            raw_output.encode("utf-8")
+        ).hexdigest()
+
+        if result.content != raw_output:
+            raise TransitionRejected(
+                "CORE ResultVersion does not preserve exact "
+                "Builder Vn output."
+            )
+
+        if result.content_hash != exact_hash:
+            raise TransitionRejected(
+                "CORE Vn hash does not match exact Gemini output."
+            )
+
+    except (TransitionRejected, ValueError, TypeError) as exc:
+        _orchestrator.result_versions = before_versions
+
+        return {
+            "ok": False,
+            "state": _orchestrator.state.value,
+            "reason": str(exc),
+            "final_authority": "HUMAN",
+        }
+
+    tool_context.state["hv_builder_vn_recorded"] = True
+    tool_context.state["hv_builder_vn_version_id"] = result.version_id
+    tool_context.state["hv_builder_vn_version_label"] = (
+        result.version_label
+    )
+    tool_context.state["hv_builder_vn_content_hash"] = (
+        result.content_hash
+    )
+
+    return {
+        "ok": True,
+        "state": _orchestrator.state.value,
+        "builder_output_key": "hv_builder_vn_output",
+        "builder_input_source":
+            "LOCKED_FINAL_RECONSTRUCTION_PACKAGE",
+        "version_id": result.version_id,
+        "version_label": result.version_label,
+        "content_hash": result.content_hash,
+        "exact_output_preserved": result.content == raw_output,
+        "final_authority": "HUMAN",
+    }

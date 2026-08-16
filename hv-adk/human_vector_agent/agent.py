@@ -13,6 +13,11 @@ from .hv_core_bridge import (
 )
 
 
+from .hv_core_bridge import (
+    prepare_builder_vn_reconstruction,
+    record_builder_vn_from_state,
+)
+
 builder_v1_agent = Agent(
     name="human_vector_builder_v1",
     model="gemini-3.5-flash",
@@ -50,6 +55,52 @@ builder_v1_tool = AgentTool(
     agent=builder_v1_agent,
 )
 
+
+
+builder_vn_agent = Agent(
+    name="human_vector_builder_vn",
+    model="gemini-3.5-flash",
+    description=(
+        "HUMAN VECTOR reconstruction Builder. Produces the next "
+        "candidate version only from the exact locked Final "
+        "Reconstruction Package."
+    ),
+    instruction=(
+        "You are the HUMAN VECTOR Builder Reconstruction AI. "
+        "You are not HUMAN and you have no authority to approve, "
+        "select, verify, declare VF, or make final HUMAN decisions.\n\n"
+
+        "Your ONLY reconstruction input is the exact locked Final "
+        "Reconstruction Package below, injected from CORE into ADK "
+        "session state:\n"
+        "{hv_builder_vn_reconstruction_package}\n\n"
+
+        "Obey builder_use_contract in that package exactly. "
+        "Preserve the confirmed Human Direction and the canonical V1 "
+        "as the source version. "
+        "Apply cognitive changes ONLY from the explicitly authorized "
+        "locked Manual Transfer items. "
+
+        "If memory_mode is MEMORY_TRANSFER, use ONLY the explicitly "
+        "authorized items contained in the locked MEMORY_TRANSFER. "
+        "If memory_mode is NO_RELEVANT_MEMORY, do not invent, infer, "
+        "or import memory. "
+
+        "Human Cognitive Response, Critic material, Conflict Space, "
+        "and HUMAN selection may appear for provenance and context. "
+        "They do NOT authorize you to import rejected, unresolved, "
+        "unselected, or otherwise unauthorized material. "
+
+        "Do not simulate a HUMAN reaction or HUMAN approval. "
+        "Do not claim the result is VF. "
+        "Do not rewrite the protocol or explain your execution. "
+        "Produce only the reconstructed candidate content for the "
+        "next version."
+    ),
+    output_key="hv_builder_vn_output",
+)
+
+builder_vn_tool = AgentTool(agent=builder_vn_agent)
 
 
 critic_v1_agent = Agent(
@@ -140,7 +191,18 @@ root_agent = Agent(
         "Use only explicit session/HUMAN information available for those fields. "
         "When prepare_critic_analysis returns ok=true and state=CRITIC_RUNNING, "
         "call critic_v1_tool exactly once for that Critic package. "
-        "The Critic must analyze only the exact package injected into ADK state. "
+        "When the CORE state is RECONSTRUCTION_PACKAGE_READY, call "
+            "prepare_builder_vn_reconstruction. Only if that operation "
+            "returns ok=true may you invoke builder_vn_tool. "
+            "The Builder Vn must reconstruct only from the exact locked "
+            "Final Reconstruction Package injected into ADK session state. "
+            "After Builder Vn completes, call record_builder_vn_from_state. "
+            "Never copy, paraphrase, summarize, rewrite, or manually pass "
+            "the Builder Vn output for recording. The bridge must read the "
+            "exact hv_builder_vn_output value from ADK session state. "
+            "After Vn is recorded, automation must stop at VN_GENERATED. "
+            "Never perform HUMAN verification or declare VF for the human. "
+            "The Critic must analyze only the exact package injected into ADK state. "
         "After the Critic finishes, call record_critic_review_from_state. "
         "Never copy, paraphrase, summarize, or manually recreate the Critic output "
         "before recording it; the bridge must read the exact output_key value. "
@@ -155,7 +217,10 @@ root_agent = Agent(
         advance_to_builder_v1_running,
         prepare_builder_v1_direction,
         builder_v1_tool,
-        record_builder_v1_from_state,        prepare_critic_analysis,
+        record_builder_v1_from_state,
+        prepare_builder_vn_reconstruction,
+        builder_vn_tool,
+        record_builder_vn_from_state,        prepare_critic_analysis,
         critic_v1_tool,
         record_critic_review_from_state,
 
