@@ -8,6 +8,31 @@ from human_vector.states import HumanVectorState as S
 _orchestrator = SystemOrchestrator()
 
 
+def bind_orchestrator(orchestrator: SystemOrchestrator) -> dict:
+    """Bind the ADK bridge to an existing HUMAN VECTOR CORE session.
+
+    Technical binding only: no copy, state transition, cognitive action,
+    artefact mutation, or HUMAN impersonation is performed.
+    """
+    global _orchestrator
+
+    if not isinstance(orchestrator, SystemOrchestrator):
+        raise TypeError(
+            "bind_orchestrator requires an existing SystemOrchestrator instance."
+        )
+
+    _orchestrator = orchestrator
+
+    return {
+        "ok": True,
+        "same_instance": _orchestrator is orchestrator,
+        "state": _orchestrator.state.value,
+        "revision": _orchestrator.revision,
+        "history_length": len(_orchestrator.history),
+        "final_authority": "HUMAN",
+    }
+
+
 def get_human_vector_core_status() -> dict:
     """Return the current HUMAN VECTOR core state without changing it."""
     return {
@@ -637,8 +662,8 @@ def prepare_builder_vn_reconstruction(
     )
 
     # A previous/stale model output must never authorize a new Vn.
-    tool_context.state.pop("hv_builder_vn_output", None)
-    tool_context.state.pop("hv_builder_vn_recorded", None)
+    tool_context.state["hv_builder_vn_output"] = None
+    tool_context.state["hv_builder_vn_recorded"] = None
 
     return {
         "ok": True,
