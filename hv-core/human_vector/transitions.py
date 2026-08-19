@@ -221,6 +221,7 @@ ALLOWED_TRANSITIONS = {
     }),
     S.VF_DECLARED: frozenset({
         S.VF_LOCKING_IN_PROGRESS,
+        S.HUMAN_VERIFICATION_REQUIRED,
     }),
     S.VF_LOCKING_IN_PROGRESS: frozenset({
         S.VF_LOCKED,

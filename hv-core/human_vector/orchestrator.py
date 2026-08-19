@@ -111,6 +111,18 @@ HUMAN_AUTHORITY_TRANSITIONS = frozenset({
         S.HUMAN_VERIFICATION_REQUIRED,
         S.VF_PRECHECK_REQUIRED,
     ),
+    (
+        S.VF_DECLARED,
+        S.HUMAN_VERIFICATION_REQUIRED,
+    ),
+    (
+        S.HUMAN_VERIFICATION_REQUIRED,
+        S.ITERATION_DECISION_REQUIRED,
+    ),
+    (
+        S.ITERATION_DECISION_REQUIRED,
+        S.RECONSTRUCTION_PACKAGE_PREPARATION,
+    ),
 })
 
 
@@ -289,6 +301,58 @@ class VFHumanDeclaration:
     intended_use: str
     decision_assumption: str
     declared_revision: int
+
+
+@dataclass(frozen=True)
+class HumanVFReconsideration:
+    reconsideration_id: str
+    session_id: str
+    prior_declaration_snapshot: VFHumanDeclaration
+    prior_selected_version_id: str
+    prior_selected_version_content_hash: str
+    prior_declaration_revision: int
+    prior_declaration_snapshot_hash: str
+    reason: str
+    evolved_criteria: str
+    requested_changes: str
+    actor: str
+    provenance: str
+    event_type: str
+    occurred_at: str
+    source_state: str
+    return_target: str
+    created_revision: int
+    content_hash: str
+
+
+def _hv_vf_reconsideration_hash(
+    artifact: HumanVFReconsideration,
+) -> str:
+    return _hv_rc_hash(
+        {
+            "reconsideration_id": artifact.reconsideration_id,
+            "session_id": artifact.session_id,
+            "prior_selected_version_id":
+                artifact.prior_selected_version_id,
+            "prior_selected_version_content_hash":
+                artifact.prior_selected_version_content_hash,
+            "prior_declaration_revision":
+                artifact.prior_declaration_revision,
+            "prior_declaration_snapshot_hash":
+                artifact.prior_declaration_snapshot_hash,
+            "reason": artifact.reason,
+            "evolved_criteria": artifact.evolved_criteria,
+            "requested_changes": artifact.requested_changes,
+            "actor": artifact.actor,
+            "provenance": artifact.provenance,
+            "event_type": artifact.event_type,
+            "occurred_at": artifact.occurred_at,
+            "source_state": artifact.source_state,
+            "return_target": artifact.return_target,
+            "created_revision": artifact.created_revision,
+        }
+    )
+
 
 
 
@@ -1144,6 +1208,10 @@ class SystemOrchestrator:
     )
     vf_human_declaration: VFHumanDeclaration | None = None
     vf_human_declaration_revision: int | None = None
+    vf_human_declaration_history: list[VFHumanDeclaration] = field(default_factory=list)
+    vf_human_reconsideration_artifact: HumanVFReconsideration | None = None
+    vf_human_reconsideration_history: list[HumanVFReconsideration] = field(default_factory=list)
+    _vf_human_reconsideration_transition_authorization_hash: str | None = None
     vf_final_integrity_result: VFFinalIntegrityResult | None = None
     vf_final_integrity_revision: int | None = None
     final_reports: list[FinalReport] = field(default_factory=list)
@@ -2854,6 +2922,357 @@ class SystemOrchestrator:
         self.result_versions[version_id] = result
         return result
 
+
+    def _validate_vf_human_reconsideration_integrity(
+        self,
+        artifact: HumanVFReconsideration,
+        *,
+        verify_live_prior: bool = True,
+    ) -> None:
+        from dataclasses import asdict
+
+        if not isinstance(artifact, HumanVFReconsideration):
+            raise TransitionRejected(
+                "Invalid HUMAN VF reconsideration artifact."
+            )
+
+        if self.session_id is None:
+            raise TransitionRejected(
+                "HUMAN reconsideration requires active session."
+            )
+
+        if artifact.session_id != str(self.session_id):
+            raise TransitionRejected(
+                "HUMAN reconsideration session mismatch."
+            )
+
+        if artifact.actor != Actor.HUMAN.value:
+            raise TransitionRejected(
+                "HUMAN reconsideration actor must be HUMAN."
+            )
+
+        if artifact.provenance != Actor.HUMAN.value:
+            raise TransitionRejected(
+                "HUMAN reconsideration provenance must be HUMAN."
+            )
+
+        if artifact.event_type != (
+            "HUMAN_RECONSIDERATION_BEFORE_VF_LOCK"
+        ):
+            raise TransitionRejected(
+                "Invalid HUMAN reconsideration event type."
+            )
+
+        if artifact.source_state != S.VF_DECLARED.value:
+            raise TransitionRejected(
+                "Invalid HUMAN reconsideration source state."
+            )
+
+        if artifact.return_target != (
+            S.HUMAN_VERIFICATION_REQUIRED.value
+        ):
+            raise TransitionRejected(
+                "Invalid HUMAN reconsideration return target."
+            )
+
+        # Historical evidence remains valid after later revisions.
+        if artifact.created_revision > self.revision:
+            raise TransitionRejected(
+                "HUMAN reconsideration revision cannot be in the future."
+            )
+
+        if artifact.content_hash != _hv_vf_reconsideration_hash(
+            artifact
+        ):
+            raise TransitionRejected(
+                "HUMAN reconsideration content hash mismatch."
+            )
+
+        snapshot_hash = _hv_rc_hash(
+            asdict(artifact.prior_declaration_snapshot)
+        )
+
+        if snapshot_hash != artifact.prior_declaration_snapshot_hash:
+            raise TransitionRejected(
+                "Prior VF declaration snapshot hash mismatch."
+            )
+
+        snapshot = artifact.prior_declaration_snapshot
+
+        if (
+            snapshot.selected_version_id
+            != artifact.prior_selected_version_id
+            or snapshot.selected_version_content_hash
+            != artifact.prior_selected_version_content_hash
+            or snapshot.declared_revision
+            != artifact.prior_declaration_revision
+        ):
+            raise TransitionRejected(
+                "Prior VF declaration snapshot binding mismatch."
+            )
+
+        if not any(
+            old == snapshot
+            for old in self.vf_human_declaration_history
+        ):
+            raise TransitionRejected(
+                "Prior VF declaration is not preserved in history."
+            )
+
+        if not any(
+            old.reconsideration_id == artifact.reconsideration_id
+            and old.content_hash == artifact.content_hash
+            for old in self.vf_human_reconsideration_history
+        ):
+            raise TransitionRejected(
+                "HUMAN reconsideration is not preserved in history."
+            )
+
+        if verify_live_prior:
+            if self.vf_human_declaration is None:
+                raise TransitionRejected(
+                    "Live prior HUMAN VF declaration is missing."
+                )
+
+            if self.vf_human_declaration != snapshot:
+                raise TransitionRejected(
+                    "Reconsideration does not bind exact live VF declaration."
+                )
+
+            if self.vf_human_declaration_revision != (
+                artifact.prior_declaration_revision
+            ):
+                raise TransitionRejected(
+                    "Live prior VF declaration revision mismatch."
+                )
+
+
+    def record_vf_human_reconsideration(
+        self,
+        *,
+        reason: str,
+        evolved_criteria: str,
+        requested_changes: str,
+        actor: Actor,
+    ) -> HumanVFReconsideration:
+        from dataclasses import asdict
+        from datetime import datetime, timezone
+        from uuid import uuid4
+
+        if self.state is not S.VF_DECLARED:
+            raise TransitionRejected(
+                "HUMAN reconsideration requires VF_DECLARED "
+                "before technical VF lock."
+            )
+
+        if actor is not Actor.HUMAN:
+            raise TransitionRejected(
+                "HUMAN reconsideration requires HUMAN actor."
+            )
+
+        declaration = self.vf_human_declaration
+
+        if declaration is None:
+            raise TransitionRejected(
+                "Prior HUMAN VF declaration is required."
+            )
+
+        if self.vf_human_declaration_revision is None:
+            raise TransitionRejected(
+                "Prior HUMAN VF declaration revision is required."
+            )
+
+        if declaration.declared_revision != (
+            self.vf_human_declaration_revision
+        ):
+            raise TransitionRejected(
+                "Prior HUMAN VF declaration revision binding invalid."
+            )
+
+        if self.session_id is None:
+            raise TransitionRejected(
+                "HUMAN reconsideration requires active session."
+            )
+
+        values = {
+            "reason": reason,
+            "evolved_criteria": evolved_criteria,
+            "requested_changes": requested_changes,
+        }
+
+        missing = [
+            name
+            for name, value in values.items()
+            if not isinstance(value, str) or not value.strip()
+        ]
+
+        if missing:
+            raise TransitionRejected(
+                "HUMAN reconsideration missing required fields: "
+                + ", ".join(sorted(missing))
+            )
+
+        matches = [
+            version
+            for version in self.result_versions.values()
+            if version.version_id == declaration.selected_version_id
+            and version.content_hash
+                == declaration.selected_version_content_hash
+        ]
+
+        if len(matches) != 1:
+            raise TransitionRejected(
+                "Prior VF must bind exactly one ResultVersion."
+            )
+
+        selected = matches[0]
+
+        if selected.session_id != self.session_id:
+            raise TransitionRejected(
+                "Prior VF version does not belong to this session."
+            )
+
+        prior_snapshot_hash = _hv_rc_hash(
+            asdict(declaration)
+        )
+
+        provisional = HumanVFReconsideration(
+            reconsideration_id=str(uuid4()),
+            session_id=str(self.session_id),
+            prior_declaration_snapshot=declaration,
+            prior_selected_version_id=
+                declaration.selected_version_id,
+            prior_selected_version_content_hash=
+                declaration.selected_version_content_hash,
+            prior_declaration_revision=
+                declaration.declared_revision,
+            prior_declaration_snapshot_hash=
+                prior_snapshot_hash,
+            reason=reason.strip(),
+            evolved_criteria=evolved_criteria.strip(),
+            requested_changes=requested_changes.strip(),
+            actor=Actor.HUMAN.value,
+            provenance=Actor.HUMAN.value,
+            event_type=
+                "HUMAN_RECONSIDERATION_BEFORE_VF_LOCK",
+            occurred_at=datetime.now(timezone.utc).isoformat(),
+            source_state=S.VF_DECLARED.value,
+            return_target=
+                S.HUMAN_VERIFICATION_REQUIRED.value,
+            created_revision=self.revision,
+            content_hash="",
+        )
+
+        artifact = HumanVFReconsideration(
+            reconsideration_id=
+                provisional.reconsideration_id,
+            session_id=provisional.session_id,
+            prior_declaration_snapshot=
+                provisional.prior_declaration_snapshot,
+            prior_selected_version_id=
+                provisional.prior_selected_version_id,
+            prior_selected_version_content_hash=
+                provisional.prior_selected_version_content_hash,
+            prior_declaration_revision=
+                provisional.prior_declaration_revision,
+            prior_declaration_snapshot_hash=
+                provisional.prior_declaration_snapshot_hash,
+            reason=provisional.reason,
+            evolved_criteria=provisional.evolved_criteria,
+            requested_changes=provisional.requested_changes,
+            actor=provisional.actor,
+            provenance=provisional.provenance,
+            event_type=provisional.event_type,
+            occurred_at=provisional.occurred_at,
+            source_state=provisional.source_state,
+            return_target=provisional.return_target,
+            created_revision=provisional.created_revision,
+            content_hash=
+                _hv_vf_reconsideration_hash(provisional),
+        )
+
+        old_artifact = self.vf_human_reconsideration_artifact
+        old_r_len = len(
+            self.vf_human_reconsideration_history
+        )
+        old_d_len = len(
+            self.vf_human_declaration_history
+        )
+        old_auth = (
+            self._vf_human_reconsideration_transition_authorization_hash
+        )
+
+        if not any(
+            old == declaration
+            for old in self.vf_human_declaration_history
+        ):
+            self.vf_human_declaration_history.append(
+                declaration
+            )
+
+        self.vf_human_reconsideration_artifact = artifact
+        self.vf_human_reconsideration_history.append(
+            artifact
+        )
+
+        try:
+            self._validate_vf_human_reconsideration_integrity(
+                artifact,
+                verify_live_prior=True,
+            )
+
+            required_auth = _hv_rc_hash(
+                {
+                    "session_id": str(self.session_id),
+                    "reconsideration_id":
+                        artifact.reconsideration_id,
+                    "content_hash":
+                        artifact.content_hash,
+                    "revision":
+                        self.revision,
+                    "source":
+                        S.VF_DECLARED.value,
+                    "target":
+                        S.HUMAN_VERIFICATION_REQUIRED.value,
+                    "actor":
+                        Actor.HUMAN.value,
+                }
+            )
+
+            self._vf_human_reconsideration_transition_authorization_hash = (
+                required_auth
+            )
+
+            self.transition(
+                S.HUMAN_VERIFICATION_REQUIRED,
+                actor=Actor.HUMAN,
+                reason=(
+                    "HUMAN reconsidered previously declared VF "
+                    "before technical lock."
+                ),
+            )
+
+        except Exception:
+            self.vf_human_reconsideration_artifact = (
+                old_artifact
+            )
+
+            del self.vf_human_reconsideration_history[
+                old_r_len:
+            ]
+            del self.vf_human_declaration_history[
+                old_d_len:
+            ]
+
+            self._vf_human_reconsideration_transition_authorization_hash = (
+                old_auth
+            )
+            raise
+
+        self._vf_human_reconsideration_transition_authorization_hash = None
+
+        return artifact
+
     def record_vf_final_integrity_result(
         self,
         *,
@@ -3002,6 +3421,20 @@ class SystemOrchestrator:
             declared_revision=self.revision,
         )
         self.vf_human_declaration_revision = self.revision
+
+
+        if not any(
+            old.declared_revision
+                == self.vf_human_declaration.declared_revision
+            and old.selected_version_id
+                == self.vf_human_declaration.selected_version_id
+            and old.selected_version_content_hash
+                == self.vf_human_declaration.selected_version_content_hash
+            for old in self.vf_human_declaration_history
+        ):
+            self.vf_human_declaration_history.append(
+                self.vf_human_declaration
+            )
 
     def generate_version_comparison(
         self,
@@ -5797,6 +6230,60 @@ class SystemOrchestrator:
         reason: str = "",
     ) -> TransitionRecord:
         source = self.state
+
+
+        if (
+            source is S.VF_DECLARED
+            and target is S.HUMAN_VERIFICATION_REQUIRED
+        ):
+            artifact = self.vf_human_reconsideration_artifact
+
+            if artifact is None:
+                raise TransitionRejected(
+                    "VF reconsideration return requires persistent "
+                    "HUMAN reconsideration evidence."
+                )
+
+            # Initiating this transition requires HUMAN evidence
+            # created in the current revision.
+            if artifact.created_revision != self.revision:
+                raise TransitionRejected(
+                    "VF reconsideration transition requires "
+                    "current-revision HUMAN evidence."
+                )
+
+            self._validate_vf_human_reconsideration_integrity(
+                artifact,
+                verify_live_prior=True,
+            )
+
+            required_auth = _hv_rc_hash(
+                {
+                    "session_id": str(self.session_id),
+                    "reconsideration_id":
+                        artifact.reconsideration_id,
+                    "content_hash":
+                        artifact.content_hash,
+                    "revision":
+                        self.revision,
+                    "source":
+                        source.value,
+                    "target":
+                        target.value,
+                    "actor":
+                        Actor.HUMAN.value,
+                }
+            )
+
+            if (
+                self._vf_human_reconsideration_transition_authorization_hash
+                != required_auth
+            ):
+                raise TransitionRejected(
+                    "VF reconsideration transition requires "
+                    "one-shot HUMAN authorization."
+                )
+
 
         if not is_static_transition_allowed(source, target):
             if source in DYNAMIC_TRANSITION_STATES:
