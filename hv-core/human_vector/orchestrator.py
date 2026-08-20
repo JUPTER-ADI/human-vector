@@ -2945,12 +2945,13 @@ class SystemOrchestrator:
                 "Result version session UUID does not match orchestrator session."
             )
 
-        if any(
+        if label == "V1" and any(
             version.version_label == label
             for version in self.result_versions.values()
         ):
             raise TransitionRejected(
-                "Result version label already exists in this session."
+                "Canonical V1 result version label already exists "
+                "in this session."
             )
 
         version_id = str(uuid4())
@@ -3364,10 +3365,75 @@ class SystemOrchestrator:
         )
         self.vf_final_integrity_revision = self.revision
 
+    def _resolve_vf_selected_result_version(
+        self,
+        *,
+        selected_version: str,
+        selected_version_id: str = "",
+    ) -> ResultVersion:
+        # HUMAN-facing label remains semantic.
+        # Technical identity is version_id when label is ambiguous.
+
+        if (
+            not isinstance(selected_version, str)
+            or not selected_version.strip()
+        ):
+            raise TransitionRejected(
+                "VF selected version requires a version label."
+            )
+
+        selected_version_label = selected_version.strip()
+
+        if selected_version_id is None:
+            exact_id = ""
+        elif not isinstance(selected_version_id, str):
+            raise TransitionRejected(
+                "VF selected version ID must be a string."
+            )
+        else:
+            exact_id = selected_version_id.strip()
+
+        matching_versions = [
+            version
+            for version in self.result_versions.values()
+            if version.version_label == selected_version_label
+        ]
+
+        if exact_id:
+            selected = self.result_versions.get(exact_id)
+
+            if selected is None:
+                raise TransitionRejected(
+                    "VF selected version ID does not identify a "
+                    "recorded ResultVersion."
+                )
+
+            if selected.version_label != selected_version_label:
+                raise TransitionRejected(
+                    "VF selected version ID/label binding mismatch."
+                )
+
+            return selected
+
+        if len(matching_versions) == 1:
+            return matching_versions[0]
+
+        if not matching_versions:
+            raise TransitionRejected(
+                "VF selected version must resolve to a recorded "
+                "ResultVersion."
+            )
+
+        raise TransitionRejected(
+            "VF selected version label is ambiguous; exact "
+            "selected_version_id is required."
+        )
+
     def record_vf_human_declaration(
         self,
         *,
         selected_version: str,
+        selected_version_id: str = "",
         choice_reason: str,
         relation_to_initial_direction: str,
         decisive_human_contribution: str,
@@ -3426,20 +3492,10 @@ class SystemOrchestrator:
             )
 
         selected_version_label = selected_version.strip()
-
-        matching_versions = [
-            version
-            for version in self.result_versions.values()
-            if version.version_label == selected_version_label
-        ]
-
-        if len(matching_versions) != 1:
-            raise TransitionRejected(
-                "VF selected_version must resolve to exactly one recorded "
-                "ResultVersion."
-            )
-
-        selected_result_version = matching_versions[0]
+        selected_result_version = self._resolve_vf_selected_result_version(
+            selected_version=selected_version_label,
+            selected_version_id=selected_version_id,
+        )
 
         if (
             self.session_id is None
