@@ -284,6 +284,22 @@ class HumanVerification:
 
 
 @dataclass(frozen=True)
+class HumanIterationDecision:
+    decision_id: str
+    session_id: str
+    verification_id: str
+    base_version_id: str
+    base_version_label: str
+    base_version_content_hash: str
+    reason: str
+    evolved_criteria: str
+    requested_changes: str
+    actor: str
+    created_revision: int
+    content_hash: str
+
+
+@dataclass(frozen=True)
 class VFHumanDeclaration:
     selected_version: str
     selected_version_id: str
@@ -1142,6 +1158,12 @@ class SystemOrchestrator:
     human_verification_history: list[HumanVerification] = field(
         default_factory=list
     )
+
+    human_iteration_decision_artifact: HumanIterationDecision | None = None
+    human_iteration_decision_history: list[HumanIterationDecision] = field(
+        default_factory=list
+    )
+    _human_iteration_decision_transition_authorization_hash: str | None = None
     human_direction_artifact: HumanDirection | None = None
     human_direction_history: list[HumanDirection] = field(default_factory=list)
     human_response_artifact: HumanCognitiveResponse | None = None
@@ -3669,6 +3691,17 @@ class SystemOrchestrator:
                 reason=(
                     "HUMAN verified the exact compared Vn and authorized "
                     "VF technical precheck."
+                ),
+            )
+
+
+        if not evidence_sufficient:
+            self.transition(
+                S.ITERATION_DECISION_REQUIRED,
+                actor=Actor.HUMAN,
+                reason=(
+                    "HUMAN found the exact compared Vn insufficient "
+                    "and opened a new iteration decision."
                 ),
             )
 
@@ -6223,6 +6256,254 @@ class SystemOrchestrator:
 
         return record
 
+
+    def _validate_human_iteration_decision_integrity(
+        self,
+        artifact: HumanIterationDecision,
+    ) -> None:
+        if artifact.session_id != str(self.session_id):
+            raise TransitionRejected(
+                "Human iteration decision session mismatch."
+            )
+
+        if artifact.actor != Actor.HUMAN.value:
+            raise TransitionRejected(
+                "Human iteration decision actor must be HUMAN."
+            )
+
+        verification = self.human_verification_artifact
+
+        if verification is None:
+            raise TransitionRejected(
+                "Human iteration decision requires HumanVerification."
+            )
+
+        if verification.status != "EVIDENCE_INSUFFICIENT":
+            raise TransitionRejected(
+                "Human iteration decision requires insufficient evidence."
+            )
+
+        if verification.verification_id != artifact.verification_id:
+            raise TransitionRejected(
+                "Human iteration decision verification mismatch."
+            )
+
+        candidate = self._find_result_version_by_id(
+            artifact.base_version_id
+        )
+
+        if candidate is None:
+            raise TransitionRejected(
+                "Human iteration decision base version missing."
+            )
+
+        if candidate.session_id != self.session_id:
+            raise TransitionRejected(
+                "Human iteration decision session binding mismatch."
+            )
+
+        if (
+            candidate.version_label != artifact.base_version_label
+            or candidate.content_hash
+            != artifact.base_version_content_hash
+        ):
+            raise TransitionRejected(
+                "Human iteration decision base binding mismatch."
+            )
+
+        if (
+            verification.candidate_version_id != candidate.version_id
+            or verification.candidate_version_label
+            != candidate.version_label
+            or verification.candidate_content_hash
+            != candidate.content_hash
+        ):
+            raise TransitionRejected(
+                "Human iteration decision must use the exact Vn "
+                "HUMAN marked insufficient."
+            )
+
+        payload = {
+            "decision_id": artifact.decision_id,
+            "session_id": artifact.session_id,
+            "verification_id": artifact.verification_id,
+            "base_version_id": artifact.base_version_id,
+            "base_version_label": artifact.base_version_label,
+            "base_version_content_hash":
+                artifact.base_version_content_hash,
+            "reason": artifact.reason,
+            "evolved_criteria": artifact.evolved_criteria,
+            "requested_changes": artifact.requested_changes,
+            "actor": artifact.actor,
+            "created_revision": artifact.created_revision,
+        }
+
+        if artifact.content_hash != _hv_rc_hash(payload):
+            raise TransitionRejected(
+                "Human iteration decision hash mismatch."
+            )
+
+        matches = [
+            item
+            for item in self.human_iteration_decision_history
+            if (
+                item.decision_id == artifact.decision_id
+                and item.content_hash == artifact.content_hash
+            )
+        ]
+
+        if len(matches) != 1:
+            raise TransitionRejected(
+                "Human iteration decision must be preserved exactly once."
+            )
+
+    def record_human_iteration_decision(
+        self,
+        reason: str,
+        evolved_criteria: str,
+        requested_changes: str,
+        actor: Actor,
+    ) -> HumanIterationDecision:
+        if self.state is not S.ITERATION_DECISION_REQUIRED:
+            raise TransitionRejected(
+                "Human iteration decision requires "
+                "ITERATION_DECISION_REQUIRED."
+            )
+
+        if actor is not Actor.HUMAN:
+            raise TransitionRejected(
+                "Human iteration decision requires HUMAN actor."
+            )
+
+        values = {
+            "reason": reason,
+            "evolved_criteria": evolved_criteria,
+            "requested_changes": requested_changes,
+        }
+
+        missing = [
+            name
+            for name, value in values.items()
+            if not isinstance(value, str) or not value.strip()
+        ]
+
+        if missing:
+            raise TransitionRejected(
+                "Human iteration decision missing required fields: "
+                + ", ".join(sorted(missing))
+            )
+
+        verification = self.human_verification_artifact
+
+        if verification is None:
+            raise TransitionRejected(
+                "Human iteration decision requires HumanVerification."
+            )
+
+        if verification.status != "EVIDENCE_INSUFFICIENT":
+            raise TransitionRejected(
+                "Human iteration decision requires the latest Vn "
+                "to be HUMAN-verified as insufficient."
+            )
+
+        if (
+            not self.human_verification_history
+            or self.human_verification_history[-1] != verification
+        ):
+            raise TransitionRejected(
+                "Human iteration decision requires latest verification."
+            )
+
+        candidate = self._find_result_version_by_id(
+            verification.candidate_version_id
+        )
+
+        if candidate is None:
+            raise TransitionRejected(
+                "Human iteration base version missing."
+            )
+
+        if candidate.session_id != self.session_id:
+            raise TransitionRejected(
+                "Human iteration base session mismatch."
+            )
+
+        if (
+            candidate.version_label
+            != verification.candidate_version_label
+            or candidate.content_hash
+            != verification.candidate_content_hash
+        ):
+            raise TransitionRejected(
+                "Human iteration base does not match verified Vn."
+            )
+
+        decision_id = str(_hv_rc_uuid4())
+
+        payload = {
+            "decision_id": decision_id,
+            "session_id": str(self.session_id),
+            "verification_id": verification.verification_id,
+            "base_version_id": candidate.version_id,
+            "base_version_label": candidate.version_label,
+            "base_version_content_hash": candidate.content_hash,
+            "reason": reason.strip(),
+            "evolved_criteria": evolved_criteria.strip(),
+            "requested_changes": requested_changes.strip(),
+            "actor": Actor.HUMAN.value,
+            "created_revision": self.revision,
+        }
+
+        artifact = HumanIterationDecision(
+            **payload,
+            content_hash=_hv_rc_hash(payload),
+        )
+
+        old_artifact = self.human_iteration_decision_artifact
+        old_len = len(self.human_iteration_decision_history)
+        old_auth = (
+            self._human_iteration_decision_transition_authorization_hash
+        )
+
+        self.human_iteration_decision_artifact = artifact
+        self.human_iteration_decision_history.append(artifact)
+
+        required_auth = _hv_rc_hash(
+            {
+                "session_id": str(self.session_id),
+                "decision_id": artifact.decision_id,
+                "content_hash": artifact.content_hash,
+                "revision": self.revision,
+                "source": S.ITERATION_DECISION_REQUIRED.value,
+                "target": S.RECONSTRUCTION_PACKAGE_PREPARATION.value,
+                "actor": Actor.HUMAN.value,
+            }
+        )
+
+        self._human_iteration_decision_transition_authorization_hash = (
+            required_auth
+        )
+
+        try:
+            self.transition(
+                S.RECONSTRUCTION_PACKAGE_PREPARATION,
+                actor=Actor.HUMAN,
+                reason=(
+                    "HUMAN supplied the reason, evolved criteria and "
+                    "requested changes for the next Vn."
+                ),
+            )
+        except Exception:
+            self.human_iteration_decision_artifact = old_artifact
+            del self.human_iteration_decision_history[old_len:]
+            self._human_iteration_decision_transition_authorization_hash = (
+                old_auth
+            )
+            raise
+
+        self._human_iteration_decision_transition_authorization_hash = None
+        return artifact
+
     def transition(
         self,
         target: S,
@@ -6284,6 +6565,112 @@ class SystemOrchestrator:
                     "one-shot HUMAN authorization."
                 )
 
+
+
+        if (
+            source is S.HUMAN_VERIFICATION_REQUIRED
+            and target is S.ITERATION_DECISION_REQUIRED
+        ):
+            latest = self.history[-1] if self.history else None
+
+            vf_reconsideration_branch = (
+                latest is not None
+                and latest.source is S.VF_DECLARED
+                and latest.target is S.HUMAN_VERIFICATION_REQUIRED
+                and latest.revision == self.revision
+                and self.vf_human_reconsideration_artifact is not None
+                and (
+                    self.vf_human_reconsideration_artifact.created_revision
+                    == self.revision - 1
+                )
+            )
+
+            verification = self.human_verification_artifact
+
+            insufficient_branch = (
+                verification is not None
+                and verification.status == "EVIDENCE_INSUFFICIENT"
+                and verification.verified_revision == self.revision
+                and bool(self.human_verification_history)
+                and self.human_verification_history[-1] == verification
+            )
+
+            if not (
+                vf_reconsideration_branch
+                or insufficient_branch
+            ):
+                raise TransitionRejected(
+                    "Iteration decision requires either current VF HUMAN "
+                    "reconsideration or current HUMAN evidence insufficiency."
+                )
+
+        if (
+            source is S.ITERATION_DECISION_REQUIRED
+            and target is S.RECONSTRUCTION_PACKAGE_PREPARATION
+        ):
+            vf_branch = False
+
+            if len(self.history) >= 2:
+                prior = self.history[-2]
+                latest = self.history[-1]
+                reconsideration = self.vf_human_reconsideration_artifact
+
+                vf_branch = (
+                    prior.source is S.VF_DECLARED
+                    and prior.target is S.HUMAN_VERIFICATION_REQUIRED
+                    and latest.source is S.HUMAN_VERIFICATION_REQUIRED
+                    and latest.target is S.ITERATION_DECISION_REQUIRED
+                    and latest.revision == self.revision
+                    and reconsideration is not None
+                    and reconsideration.created_revision
+                    == self.revision - 2
+                )
+
+                if vf_branch:
+                    self._validate_vf_human_reconsideration_integrity(
+                        reconsideration,
+                        verify_live_prior=True,
+                    )
+
+            if not vf_branch:
+                artifact = self.human_iteration_decision_artifact
+
+                if artifact is None:
+                    raise TransitionRejected(
+                        "Normal Vn iteration requires persistent "
+                        "HumanIterationDecision."
+                    )
+
+                if artifact.created_revision != self.revision:
+                    raise TransitionRejected(
+                        "Normal Vn iteration requires current-revision "
+                        "HUMAN decision evidence."
+                    )
+
+                self._validate_human_iteration_decision_integrity(
+                    artifact
+                )
+
+                required_auth = _hv_rc_hash(
+                    {
+                        "session_id": str(self.session_id),
+                        "decision_id": artifact.decision_id,
+                        "content_hash": artifact.content_hash,
+                        "revision": self.revision,
+                        "source": source.value,
+                        "target": target.value,
+                        "actor": Actor.HUMAN.value,
+                    }
+                )
+
+                if (
+                    self._human_iteration_decision_transition_authorization_hash
+                    != required_auth
+                ):
+                    raise TransitionRejected(
+                        "Normal Vn iteration requires one-shot HUMAN "
+                        "authorization."
+                    )
 
         if not is_static_transition_allowed(source, target):
             if source in DYNAMIC_TRANSITION_STATES:
