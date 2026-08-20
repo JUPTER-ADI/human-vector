@@ -687,11 +687,19 @@ class FinalReconstructionPackage:
     created_at: str
     created_revision: int
 
+    # Effective base of this reconstruction iteration.
+    # source_version_* remains historical/canonical provenance.
+    iteration_base_version_id: str = ""
+    iteration_base_version_label: str = ""
+    iteration_base_version_content_hash: str = ""
+    human_iteration_context: dict | None = None
+
+
 
 def _hv_rc_package_hash(
     package: FinalReconstructionPackage,
 ) -> str:
-    return _hv_rc_hash({
+    payload = {
         "session_id": package.session_id,
         "package_revision": package.package_revision,
 
@@ -718,7 +726,24 @@ def _hv_rc_package_hash(
 
         "builder_use_contract":
             package.builder_use_contract,
-    })
+    }
+
+    # Historical revision 1 keeps the exact old hash contract.
+    if package.package_revision >= 2:
+        payload.update(
+            {
+                "iteration_base_version_id":
+                    package.iteration_base_version_id,
+                "iteration_base_version_label":
+                    package.iteration_base_version_label,
+                "iteration_base_version_content_hash":
+                    package.iteration_base_version_content_hash,
+                "human_iteration_context":
+                    package.human_iteration_context,
+            }
+        )
+
+    return _hv_rc_hash(payload)
 
 
 @dataclass(frozen=True)
@@ -4536,6 +4561,173 @@ class SystemOrchestrator:
             "or explicit HUMAN NO_RELEVANT_MEMORY resolution."
         )
 
+
+    def _resolve_final_reconstruction_iteration_context(
+        self,
+    ) -> dict | None:
+        if self.state is not S.RECONSTRUCTION_PACKAGE_PREPARATION:
+            return None
+
+        if not self.history:
+            return None
+
+        latest = self.history[-1]
+
+        if (
+            latest.source is not S.ITERATION_DECISION_REQUIRED
+            or latest.target is not S.RECONSTRUCTION_PACKAGE_PREPARATION
+            or latest.revision != self.revision
+        ):
+            return None
+
+        # Normal Vn -> Vn+1:
+        # exact insufficient Vn + explicit HUMAN decision.
+        decision = self.human_iteration_decision_artifact
+
+        if (
+            decision is not None
+            and decision.created_revision == self.revision - 1
+            and bool(self.human_iteration_decision_history)
+            and self.human_iteration_decision_history[-1] == decision
+        ):
+            self._validate_human_iteration_decision_integrity(
+                decision
+            )
+
+            base = self._find_result_version_by_id(
+                decision.base_version_id
+            )
+
+            if base is None:
+                raise TransitionRejected(
+                    "Iterative reconstruction base version is missing."
+                )
+
+            if (
+                base.version_label != decision.base_version_label
+                or base.content_hash
+                != decision.base_version_content_hash
+            ):
+                raise TransitionRejected(
+                    "Iterative reconstruction base binding mismatch."
+                )
+
+            return {
+                "kind": "HUMAN_ITERATION_DECISION",
+                "decision_id": decision.decision_id,
+                "verification_id": decision.verification_id,
+                "base_version_id": decision.base_version_id,
+                "base_version_label": decision.base_version_label,
+                "base_version_content_hash":
+                    decision.base_version_content_hash,
+                "reason": decision.reason,
+                "evolved_criteria": decision.evolved_criteria,
+                "requested_changes": decision.requested_changes,
+                "actor": decision.actor,
+                "created_revision": decision.created_revision,
+                "artifact_content_hash": decision.content_hash,
+            }
+
+        # Prior declared VF -> next reconstruction.
+        reconsideration = self.vf_human_reconsideration_artifact
+
+        if (
+            reconsideration is not None
+            and len(self.history) >= 3
+        ):
+            prior = self.history[-2]
+            origin = self.history[-3]
+
+            vf_route = (
+                origin.source is S.VF_DECLARED
+                and origin.target is S.HUMAN_VERIFICATION_REQUIRED
+                and prior.source is S.HUMAN_VERIFICATION_REQUIRED
+                and prior.target is S.ITERATION_DECISION_REQUIRED
+                and latest.source is S.ITERATION_DECISION_REQUIRED
+                and latest.target
+                is S.RECONSTRUCTION_PACKAGE_PREPARATION
+            )
+
+            if vf_route:
+                self._validate_vf_human_reconsideration_integrity(
+                    reconsideration,
+                    verify_live_prior=True,
+                )
+
+                base = self._find_result_version_by_id(
+                    reconsideration.prior_selected_version_id
+                )
+
+                if base is None:
+                    raise TransitionRejected(
+                        "VF reconsideration base version is missing."
+                    )
+
+                if (
+                    base.content_hash
+                    != reconsideration.prior_selected_version_content_hash
+                ):
+                    raise TransitionRejected(
+                        "VF reconsideration base hash mismatch."
+                    )
+
+                return {
+                    "kind": "VF_HUMAN_RECONSIDERATION",
+                    "reconsideration_id":
+                        reconsideration.reconsideration_id,
+                    "base_version_id":
+                        reconsideration.prior_selected_version_id,
+                    "base_version_label": base.version_label,
+                    "base_version_content_hash":
+                        reconsideration.prior_selected_version_content_hash,
+                    "prior_declaration_revision":
+                        reconsideration.prior_declaration_revision,
+                    "reason": reconsideration.reason,
+                    "evolved_criteria":
+                        reconsideration.evolved_criteria,
+                    "requested_changes":
+                        reconsideration.requested_changes,
+                    "actor": reconsideration.actor,
+                    "created_revision":
+                        reconsideration.created_revision,
+                    "artifact_content_hash":
+                        reconsideration.content_hash,
+                }
+
+        return None
+
+    def _final_reconstruction_builder_use_contract(
+        self,
+        iteration_context: dict | None,
+    ) -> str:
+        base_contract = (
+            "Builder Reconstruction MUST preserve confirmed Human "
+            "Direction and canonical V1. Cognitive modifications may "
+            "use ONLY the explicitly authorized items in the locked "
+            "Manual Transfer package and, when memory_mode is "
+            "MEMORY_TRANSFER, ONLY the explicitly authorized items "
+            "in the locked MEMORY_TRANSFER package. Human Response "
+            "and HUMAN Critic Selection are included for traceability "
+            "and provenance, not as blanket authorization to import "
+            "unselected material."
+        )
+
+        if iteration_context is None:
+            return base_contract
+
+        return (
+            base_contract
+            + " For this iterative reconstruction, source_version_* "
+            "remains historical provenance only. The effective "
+            "reconstruction base is iteration_base_version_*. "
+            "Builder MUST reconstruct directly from that exact base "
+            "version and MUST NOT skip an intermediate version. "
+            "The HUMAN iteration context is authoritative only for "
+            "its explicit reason, evolved_criteria and "
+            "requested_changes. Builder MUST NOT invent, expand or "
+            "replace those HUMAN instructions."
+        )
+
     def _collect_final_reconstruction_sources(
         self,
         *,
@@ -4767,6 +4959,45 @@ class SystemOrchestrator:
                 f"{memory_mode!r}."
             )
 
+
+        iteration_context = (
+            self._resolve_final_reconstruction_iteration_context()
+        )
+
+        if iteration_context is None:
+            iteration_base_version_id = source_version_id
+            iteration_base_version_label = version_label
+            iteration_base_version_content_hash = version_content_hash
+        else:
+            iteration_base_version_id = (
+                iteration_context["base_version_id"]
+            )
+            iteration_base_version_label = (
+                iteration_context["base_version_label"]
+            )
+            iteration_base_version_content_hash = (
+                iteration_context["base_version_content_hash"]
+            )
+
+            iteration_base = self._find_result_version_by_id(
+                iteration_base_version_id
+            )
+
+            if iteration_base is None:
+                raise TransitionRejected(
+                    "Final Reconstruction iteration base is missing."
+                )
+
+            if (
+                iteration_base.version_label
+                != iteration_base_version_label
+                or iteration_base.content_hash
+                != iteration_base_version_content_hash
+            ):
+                raise TransitionRejected(
+                    "Final Reconstruction iteration base integrity failed."
+                )
+
         return {
             "source_version_id": source_version_id,
             "source_version_label": version_label,
@@ -4799,6 +5030,19 @@ class SystemOrchestrator:
 
             "no_relevant_memory_reason":
                 no_relevant_reason,
+
+            "iteration_base_version_id":
+                iteration_base_version_id,
+            "iteration_base_version_label":
+                iteration_base_version_label,
+            "iteration_base_version_content_hash":
+                iteration_base_version_content_hash,
+            "human_iteration_context":
+                (
+                    _hv_rc_snapshot(iteration_context)
+                    if iteration_context is not None
+                    else None
+                ),
         }
 
     def _validate_final_reconstruction_package_integrity(
@@ -4845,6 +5089,36 @@ class SystemOrchestrator:
             "no_relevant_memory_reason":
                 package.no_relevant_memory_reason,
         }
+
+        if package.package_revision >= 2:
+            checks.update(
+                {
+                    "iteration_base_version_id":
+                        package.iteration_base_version_id,
+                    "iteration_base_version_label":
+                        package.iteration_base_version_label,
+                    "iteration_base_version_content_hash":
+                        package.iteration_base_version_content_hash,
+                    "human_iteration_context":
+                        package.human_iteration_context,
+                }
+            )
+
+            expected_builder_contract = (
+                self._final_reconstruction_builder_use_contract(
+                    current["human_iteration_context"]
+                )
+            )
+
+            if (
+                package.builder_use_contract
+                != expected_builder_contract
+            ):
+                raise TransitionRejected(
+                    "Final Reconstruction iterative Builder contract "
+                    "integrity check failed."
+                )
+
 
         for name, expected in checks.items():
             if current[name] != expected:
@@ -4924,15 +5198,9 @@ class SystemOrchestrator:
                 sources["no_relevant_memory_reason"],
 
             builder_use_contract=(
-                "Builder Reconstruction MUST preserve confirmed Human "
-                "Direction and canonical V1. Cognitive modifications may "
-                "use ONLY the explicitly authorized items in the locked "
-                "Manual Transfer package and, when memory_mode is "
-                "MEMORY_TRANSFER, ONLY the explicitly authorized items "
-                "in the locked MEMORY_TRANSFER package. Human Response "
-                "and HUMAN Critic Selection are included for traceability "
-                "and provenance, not as blanket authorization to import "
-                "unselected material."
+                self._final_reconstruction_builder_use_contract(
+                    sources["human_iteration_context"]
+                )
             ),
 
             status="DRAFT",
@@ -4948,6 +5216,15 @@ class SystemOrchestrator:
             content_hash="",
             created_at=_hv_rc_now(),
             created_revision=self.revision,
+
+            iteration_base_version_id=
+                sources["iteration_base_version_id"],
+            iteration_base_version_label=
+                sources["iteration_base_version_label"],
+            iteration_base_version_content_hash=
+                sources["iteration_base_version_content_hash"],
+            human_iteration_context=
+                sources["human_iteration_context"],
         )
 
         package = _hv_rc_replace(
