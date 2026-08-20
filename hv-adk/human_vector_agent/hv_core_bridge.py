@@ -678,28 +678,63 @@ def prepare_builder_vn_reconstruction(
     }
 
 
-def _next_builder_vn_label() -> str:
-    import re
+def _next_builder_vn_label(package) -> str:
+    # The exact package base determines the next version.
+    # Retained history remains provenance only and cannot
+    # force a jump in numbering.
 
-    numbers = []
+    base_label = getattr(
+        package,
+        "iteration_base_version_label",
+        "",
+    )
 
-    for version in _orchestrator.result_versions.values():
-        label = getattr(version, "version_label", "")
+    # Historical package revision 1 predates the explicit
+    # iteration_base_version_* fields.
+    if not isinstance(base_label, str) or not base_label.strip():
+        if getattr(package, "package_revision", 0) == 1:
+            base_label = getattr(
+                package,
+                "source_version_label",
+                "",
+            )
+        else:
+            raise TransitionRejected(
+                "Builder Vn requires an explicit iteration base "
+                "version label."
+            )
 
-        if not isinstance(label, str):
-            continue
+    if not isinstance(base_label, str):
+        raise TransitionRejected(
+            "Builder Vn iteration base label must be a string."
+        )
 
-        match = re.fullmatch(r"V([1-9][0-9]*)", label.strip())
+    base_label = base_label.strip()
 
-        if match:
-            numbers.append(int(match.group(1)))
+    if not base_label.startswith("V"):
+        raise TransitionRejected(
+            "Builder Vn iteration base label must be an exact Vn label."
+        )
 
-    next_number = max(numbers, default=1) + 1
+    numeric = base_label[1:]
 
-    if next_number < 2:
-        next_number = 2
+    if (
+        not numeric
+        or not numeric.isdigit()
+        or numeric.startswith("0")
+    ):
+        raise TransitionRejected(
+            "Builder Vn iteration base label must be an exact Vn label."
+        )
 
-    return f"V{next_number}"
+    base_number = int(numeric)
+
+    if base_number < 1:
+        raise TransitionRejected(
+            "Builder Vn iteration base label must be an exact Vn label."
+        )
+
+    return f"V{base_number + 1}"
 
 
 def record_builder_vn_from_state(
@@ -806,7 +841,7 @@ def record_builder_vn_from_state(
             "final_authority": "HUMAN",
         }
 
-    version_label = _next_builder_vn_label()
+    version_label = _next_builder_vn_label(package)
 
     core_session_id = str(
         _orchestrator.session_id or package.session_id
