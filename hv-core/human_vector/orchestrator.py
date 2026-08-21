@@ -3607,14 +3607,48 @@ class SystemOrchestrator:
                 "Version Comparison requires distinct ResultVersions."
             )
 
-        if base.version_label != "V1":
+        # HV_EXACT_IMMEDIATE_PARENT_VERSION_COMPARISON
+        package = self.reconstruction_package_artifact
+
+        if package is None:
             raise TransitionRejected(
-                "Canonical Version Comparison base must be V1."
+                "Version Comparison requires the current reconstruction package."
             )
 
-        if candidate.version_label == "V1":
+        if getattr(package.status, "value", package.status) != "LOCKED":
             raise TransitionRejected(
-                "Version Comparison candidate must be a reconstructed Vn."
+                "Version Comparison requires the LOCKED reconstruction package."
+            )
+
+        if (
+            package.source_version_id != base.version_id
+            or package.source_version_content_hash != base.content_hash
+        ):
+            raise TransitionRejected(
+                "Version Comparison base must be the exact immediate reconstruction parent."
+            )
+
+        base_label = base.version_label
+        candidate_label = candidate.version_label
+
+        if (
+            not isinstance(base_label, str)
+            or not isinstance(candidate_label, str)
+            or not base_label.startswith("V")
+            or not candidate_label.startswith("V")
+            or not base_label[1:].isdigit()
+            or not candidate_label[1:].isdigit()
+        ):
+            raise TransitionRejected(
+                "Version Comparison requires numeric Vn labels."
+            )
+
+        base_number = int(base_label[1:])
+        candidate_number = int(candidate_label[1:])
+
+        if candidate_number != base_number + 1:
+            raise TransitionRejected(
+                "Version Comparison requires consecutive Vn -> Vn+1 versions."
             )
 
         base_hash = sha256(
@@ -3627,7 +3661,7 @@ class SystemOrchestrator:
 
         if base_hash != base.content_hash:
             raise TransitionRejected(
-                "Canonical V1 content hash integrity check failed."
+                "Base ResultVersion content hash integrity check failed."
             )
 
         if candidate_hash != candidate.content_hash:
