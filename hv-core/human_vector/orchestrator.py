@@ -3546,6 +3546,26 @@ class SystemOrchestrator:
         candidate_version_id: str,
         actor: Actor,
     ) -> VersionComparison:
+        # HV_CONSECUTIVE_PARENT_COMPARISON
+        package = getattr(self, "reconstruction_package_artifact", None)
+        if package is not None:
+            if isinstance(package, dict):
+                expected_base_id = package.get("source_version_id")
+                expected_base_hash = package.get("source_version_content_hash")
+            else:
+                expected_base_id = getattr(package, "source_version_id", None)
+                expected_base_hash = getattr(package, "source_version_content_hash", None)
+
+            if expected_base_id and base_version_id != expected_base_id:
+                raise TransitionRejected("Version Comparison base must equal immediate reconstruction parent.")
+
+            if expected_base_id:
+                expected_base = self._find_result_version_by_id(expected_base_id)
+                if expected_base is None:
+                    raise TransitionRejected("Version Comparison parent is missing.")
+                if expected_base_hash and expected_base.content_hash != expected_base_hash:
+                    raise TransitionRejected("Version Comparison parent hash mismatch.")
+
         from difflib import unified_diff
         from hashlib import sha256
         from uuid import uuid4
@@ -4618,139 +4638,52 @@ class SystemOrchestrator:
         )
 
 
-    def _resolve_final_reconstruction_iteration_context(
-        self,
-    ) -> dict | None:
-        if self.state is not S.RECONSTRUCTION_PACKAGE_PREPARATION:
+    def _resolve_final_reconstruction_iteration_context(self) -> dict[str, str] | None:
+        state_value = getattr(self.state, "value", self.state)
+
+        if state_value != "RECONSTRUCTION_PACKAGE_PREPARATION":
+            package = getattr(self, "reconstruction_package_artifact", None)
+
+            if package is not None:
+                if isinstance(package, dict):
+                    source_id = package.get("source_version_id")
+                    source_label = package.get("source_version_label")
+                    source_hash = package.get("source_version_content_hash")
+                else:
+                    source_id = getattr(package, "source_version_id", None)
+                    source_label = getattr(package, "source_version_label", None)
+                    source_hash = getattr(package, "source_version_content_hash", None)
+
+                if source_id:
+                    base = self._find_result_version_by_id(source_id)
+                    if base is None:
+                        raise TransitionRejected("Frozen reconstruction parent is missing.")
+                    if base.version_label != source_label or base.content_hash != source_hash:
+                        raise TransitionRejected("Frozen reconstruction parent integrity failed.")
+                    return {
+                        "base_version_id": base.version_id,
+                        "base_version_label": base.version_label,
+                        "base_version_content_hash": base.content_hash,
+                    }
+
+        versions = list(self.result_versions.values())
+        if not versions:
             return None
 
-        if not self.history:
-            return None
+        base = max(
+            versions,
+            key=lambda version: (
+                getattr(version, "created_revision", -1),
+                getattr(version, "version_label", ""),
+                getattr(version, "version_id", ""),
+            ),
+        )
 
-        latest = self.history[-1]
-
-        if (
-            latest.source is not S.ITERATION_DECISION_REQUIRED
-            or latest.target is not S.RECONSTRUCTION_PACKAGE_PREPARATION
-            or latest.revision != self.revision
-        ):
-            return None
-
-        # Normal Vn -> Vn+1:
-        # exact insufficient Vn + explicit HUMAN decision.
-        decision = self.human_iteration_decision_artifact
-
-        if (
-            decision is not None
-            and decision.created_revision == self.revision - 1
-            and bool(self.human_iteration_decision_history)
-            and self.human_iteration_decision_history[-1] == decision
-        ):
-            self._validate_human_iteration_decision_integrity(
-                decision
-            )
-
-            base = self._find_result_version_by_id(
-                decision.base_version_id
-            )
-
-            if base is None:
-                raise TransitionRejected(
-                    "Iterative reconstruction base version is missing."
-                )
-
-            if (
-                base.version_label != decision.base_version_label
-                or base.content_hash
-                != decision.base_version_content_hash
-            ):
-                raise TransitionRejected(
-                    "Iterative reconstruction base binding mismatch."
-                )
-
-            return {
-                "kind": "HUMAN_ITERATION_DECISION",
-                "decision_id": decision.decision_id,
-                "verification_id": decision.verification_id,
-                "base_version_id": decision.base_version_id,
-                "base_version_label": decision.base_version_label,
-                "base_version_content_hash":
-                    decision.base_version_content_hash,
-                "reason": decision.reason,
-                "evolved_criteria": decision.evolved_criteria,
-                "requested_changes": decision.requested_changes,
-                "actor": decision.actor,
-                "created_revision": decision.created_revision,
-                "artifact_content_hash": decision.content_hash,
-            }
-
-        # Prior declared VF -> next reconstruction.
-        reconsideration = self.vf_human_reconsideration_artifact
-
-        if (
-            reconsideration is not None
-            and len(self.history) >= 3
-        ):
-            prior = self.history[-2]
-            origin = self.history[-3]
-
-            vf_route = (
-                origin.source is S.VF_DECLARED
-                and origin.target is S.HUMAN_VERIFICATION_REQUIRED
-                and prior.source is S.HUMAN_VERIFICATION_REQUIRED
-                and prior.target is S.ITERATION_DECISION_REQUIRED
-                and latest.source is S.ITERATION_DECISION_REQUIRED
-                and latest.target
-                is S.RECONSTRUCTION_PACKAGE_PREPARATION
-            )
-
-            if vf_route:
-                self._validate_vf_human_reconsideration_integrity(
-                    reconsideration,
-                    verify_live_prior=True,
-                )
-
-                base = self._find_result_version_by_id(
-                    reconsideration.prior_selected_version_id
-                )
-
-                if base is None:
-                    raise TransitionRejected(
-                        "VF reconsideration base version is missing."
-                    )
-
-                if (
-                    base.content_hash
-                    != reconsideration.prior_selected_version_content_hash
-                ):
-                    raise TransitionRejected(
-                        "VF reconsideration base hash mismatch."
-                    )
-
-                return {
-                    "kind": "VF_HUMAN_RECONSIDERATION",
-                    "reconsideration_id":
-                        reconsideration.reconsideration_id,
-                    "base_version_id":
-                        reconsideration.prior_selected_version_id,
-                    "base_version_label": base.version_label,
-                    "base_version_content_hash":
-                        reconsideration.prior_selected_version_content_hash,
-                    "prior_declaration_revision":
-                        reconsideration.prior_declaration_revision,
-                    "reason": reconsideration.reason,
-                    "evolved_criteria":
-                        reconsideration.evolved_criteria,
-                    "requested_changes":
-                        reconsideration.requested_changes,
-                    "actor": reconsideration.actor,
-                    "created_revision":
-                        reconsideration.created_revision,
-                    "artifact_content_hash":
-                        reconsideration.content_hash,
-                }
-
-        return None
+        return {
+            "base_version_id": base.version_id,
+            "base_version_label": base.version_label,
+            "base_version_content_hash": base.content_hash,
+        }
 
     def _final_reconstruction_builder_use_contract(
         self,
@@ -4770,6 +4703,33 @@ class SystemOrchestrator:
 
         if iteration_context is None:
             return base_contract
+
+        # HV_STRICT_CAUSAL_BUILDER_CONTRACT
+        hv_context_reason = str(iteration_context.get("reason", "")).strip()
+        hv_context_criteria = str(iteration_context.get("evolved_criteria", "")).strip()
+        hv_context_changes = str(iteration_context.get("requested_changes", "")).strip()
+        hv_context_parent_id = str(iteration_context.get("parent_version_id", "")).strip()
+        hv_context_parent_hash = str(iteration_context.get("parent_version_content_hash", "")).strip()
+
+        if not hv_context_parent_id or not hv_context_parent_hash:
+            raise TransitionRejected(
+                "Builder iterative contract requires exact immediate-parent ID and hash."
+            )
+
+        if not hv_context_reason or not hv_context_changes:
+            raise TransitionRejected(
+                "Builder iterative contract requires explicit HUMAN reasoning and requested changes."
+            )
+
+        base_contract = (
+            base_contract
+            + "\nIMMEDIATE_PARENT_VERSION_ID=" + hv_context_parent_id
+            + "\nIMMEDIATE_PARENT_VERSION_HASH=" + hv_context_parent_hash
+            + "\nHUMAN_REASON=" + hv_context_reason
+            + "\nHUMAN_EVOLVED_CRITERIA=" + hv_context_criteria
+            + "\nHUMAN_REQUESTED_CHANGES=" + hv_context_changes
+            + "\nRULE=The Builder MUST reconstruct from this exact immediate parent and MUST materially answer the new HUMAN reasoning and requested changes."
+        )
 
         return (
             base_contract
@@ -5054,6 +5014,145 @@ class SystemOrchestrator:
                     "Final Reconstruction iteration base integrity failed."
                 )
 
+        # HV_CONSECUTIVE_PARENT_SOURCE
+        source_version_id = iteration_base_version_id
+        version_label = iteration_base_version_label
+        version_content_hash = iteration_base_version_content_hash
+
+        # HV_STRICT_CAUSAL_HUMAN_ITERATION_CONTEXT
+        human_iteration_context = dict(iteration_context or {})
+
+        hv_human_change = None
+        hv_human_change_origin = ""
+
+        # First iterative reconstruction after VF reconsideration:
+        # exact immediate-parent ID AND exact content hash required.
+        hv_reconsideration = getattr(self, "vf_human_reconsideration_artifact", None)
+
+        if hv_reconsideration is not None:
+            hv_reconsidered_id = getattr(
+                hv_reconsideration,
+                "prior_selected_version_id",
+                None,
+            )
+            hv_reconsidered_hash = getattr(
+                hv_reconsideration,
+                "prior_selected_version_content_hash",
+                None,
+            )
+
+            if (
+                hv_reconsidered_id == iteration_base_version_id
+                and isinstance(hv_reconsidered_hash, str)
+                and bool(hv_reconsidered_hash)
+                and hv_reconsidered_hash == iteration_base_version_content_hash
+            ):
+                hv_human_change = hv_reconsideration
+                hv_human_change_origin = "VF_HUMAN_RECONSIDERATION"
+
+        # Later Vn -> Vn+1:
+        # HUMAN decision must also contain BOTH exact parent ID + hash.
+        if hv_human_change is None:
+            hv_decision = getattr(
+                self,
+                "human_iteration_decision_artifact",
+                None,
+            )
+
+            if hv_decision is not None:
+                hv_ids = [
+                    getattr(hv_decision, "candidate_version_id", None),
+                    getattr(hv_decision, "version_id", None),
+                    getattr(hv_decision, "base_version_id", None),
+                    getattr(hv_decision, "source_version_id", None),
+                    getattr(hv_decision, "prior_version_id", None),
+                ]
+
+                hv_hashes = [
+                    getattr(hv_decision, "candidate_content_hash", None),
+                    getattr(hv_decision, "version_content_hash", None),
+                    getattr(hv_decision, "base_version_content_hash", None),
+                    getattr(hv_decision, "source_version_content_hash", None),
+                    getattr(hv_decision, "prior_version_content_hash", None),
+                ]
+
+                hv_nonempty_hashes = [
+                    value
+                    for value in hv_hashes
+                    if isinstance(value, str) and value
+                ]
+
+                hv_id_match = (
+                    iteration_base_version_id in hv_ids
+                )
+
+                hv_hash_match = (
+                    bool(hv_nonempty_hashes)
+                    and iteration_base_version_content_hash
+                        in hv_nonempty_hashes
+                )
+
+                if hv_id_match and hv_hash_match:
+                    hv_human_change = hv_decision
+                    hv_human_change_origin = "HUMAN_ITERATION_DECISION"
+
+        if hv_human_change is None:
+            raise TransitionRejected(
+                "Reconstruction requires a HUMAN change bound by exact immediate-parent ID and content hash."
+            )
+
+        hv_reason = getattr(hv_human_change, "reason", "")
+        hv_requested_changes = getattr(hv_human_change, "requested_changes", "")
+
+        hv_evolved_criteria = getattr(
+            hv_human_change,
+            "evolved_criteria",
+            getattr(hv_human_change, "min_criteria", ""),
+        )
+
+        if not isinstance(hv_reason, str) or not hv_reason.strip():
+            raise TransitionRejected(
+                "HUMAN reasoning is required for reconstruction."
+            )
+
+        if (
+            not isinstance(hv_requested_changes, str)
+            or not hv_requested_changes.strip()
+        ):
+            raise TransitionRejected(
+                "HUMAN requested changes are required for reconstruction."
+            )
+
+        hv_change_id = next(
+            (
+                value
+                for value in (
+                    getattr(hv_human_change, "reconsideration_id", None),
+                    getattr(hv_human_change, "decision_id", None),
+                    getattr(hv_human_change, "iteration_decision_id", None),
+                )
+                if isinstance(value, str) and value
+            ),
+            "",
+        )
+
+        human_iteration_context.update(
+            {
+                "parent_version_id": iteration_base_version_id,
+                "parent_version_content_hash": iteration_base_version_content_hash,
+                "human_change_origin": hv_human_change_origin,
+                "human_change_id": hv_change_id,
+                "human_change_content_hash": getattr(hv_human_change, "content_hash", ""),
+                "reason": hv_reason.strip(),
+                "evolved_criteria": (
+                    hv_evolved_criteria.strip()
+                    if isinstance(hv_evolved_criteria, str)
+                    else ""
+                ),
+                "requested_changes": hv_requested_changes.strip(),
+            }
+        )
+
         return {
             "source_version_id": source_version_id,
             "source_version_label": version_label,
@@ -5094,11 +5193,7 @@ class SystemOrchestrator:
             "iteration_base_version_content_hash":
                 iteration_base_version_content_hash,
             "human_iteration_context":
-                (
-                    _hv_rc_snapshot(iteration_context)
-                    if iteration_context is not None
-                    else None
-                ),
+                _hv_rc_snapshot(human_iteration_context),
         }
 
     def _validate_final_reconstruction_package_integrity(
