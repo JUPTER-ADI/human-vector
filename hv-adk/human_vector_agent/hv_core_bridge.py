@@ -922,3 +922,359 @@ def record_builder_vn_from_state(
         "exact_output_preserved": result.content == raw_output,
         "final_authority": "HUMAN",
     }
+
+_HV_FIRESTORE_PERSISTENT_MEMORY_BRIDGE_V1 = "HV_FIRESTORE_PERSISTENT_MEMORY_BRIDGE_V1"
+
+
+def retrieve_firestore_memory_candidates_to_core(
+    *,
+    project_id: str,
+    document_paths: list[str],
+    query_basis: str,
+    database: str = "(default)",
+) -> dict:
+    import hashlib
+    import json
+    from dataclasses import asdict, is_dataclass
+
+    import google.auth
+    from google.cloud import firestore
+
+    from human_vector.orchestrator import Actor
+
+    if not isinstance(project_id, str) or not project_id.strip():
+        raise ValueError("project_id is required.")
+
+    if database != "(default)":
+        raise ValueError(
+            "Persistent HUMAN VECTOR memory is restricted to "
+            "the approved Firestore (default) database."
+        )
+
+    if not isinstance(query_basis, str) or not query_basis.strip():
+        raise ValueError("query_basis is required.")
+
+    if not isinstance(document_paths, list) or not document_paths:
+        raise ValueError(
+            "At least one Firestore document path is required."
+        )
+
+    normalized_paths = []
+
+    for raw_path in document_paths:
+        if not isinstance(raw_path, str) or not raw_path.strip():
+            raise ValueError(
+                "Firestore document path must be a non-empty string."
+            )
+
+        path_value = raw_path.strip().strip("/")
+        segments = [
+            segment
+            for segment in path_value.split("/")
+            if segment
+        ]
+
+        if len(segments) < 2 or len(segments) % 2 != 0:
+            raise ValueError(
+                "Firestore path must identify an exact document."
+            )
+
+        normalized_paths.append("/".join(segments))
+
+    if len(set(normalized_paths)) != len(normalized_paths):
+        raise ValueError(
+            "Duplicate Firestore document paths are not allowed."
+        )
+
+    credentials, adc_project = google.auth.default()
+
+    if adc_project != project_id:
+        raise RuntimeError(
+            "ADC project does not match the requested Firestore project."
+        )
+
+    client = firestore.Client(
+        project=project_id,
+        credentials=credentials,
+        database=database,
+    )
+
+    candidates = []
+    not_found_paths = []
+
+    try:
+        for document_path in normalized_paths:
+            ref = client.document(document_path)
+
+            snapshot = ref.get(
+                retry=None,
+                timeout=20,
+            )
+
+            if not snapshot.exists:
+                not_found_paths.append(ref.path)
+                continue
+
+            payload = snapshot.to_dict()
+
+            if not isinstance(payload, dict):
+                raise RuntimeError(
+                    "Firestore persistent memory payload must be an object."
+                )
+
+            expected_fields = {
+                "schema_version",
+                "memory_id",
+                "source_actor",
+                "source_session_id",
+                "storage_authorized_by",
+                "status",
+                "content",
+                "provenance",
+                "authorized_effect",
+                "created_at",
+                "content_hash",
+            }
+
+            actual_fields = set(payload)
+
+            if actual_fields != expected_fields:
+                missing = sorted(expected_fields - actual_fields)
+                unexpected = sorted(actual_fields - expected_fields)
+                raise RuntimeError(
+                    "Firestore persistent memory schema fields differ; "
+                    f"missing={missing!r}; unexpected={unexpected!r}."
+                )
+
+            stored_hash = payload.get("content_hash")
+
+            if (
+                not isinstance(stored_hash, str)
+                or len(stored_hash) != 64
+            ):
+                raise RuntimeError(
+                    "Firestore persistent memory content_hash is invalid."
+                )
+
+            payload_without_hash = {
+                key: value
+                for key, value in payload.items()
+                if key != "content_hash"
+            }
+
+            try:
+                canonical = json.dumps(
+                    payload_without_hash,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                ).encode("utf-8")
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError(
+                    "Firestore persistent memory payload is not "
+                    "canonically hashable."
+                ) from exc
+
+            calculated_hash = hashlib.sha256(
+                canonical
+            ).hexdigest()
+
+            if calculated_hash != stored_hash:
+                raise RuntimeError(
+                    "Firestore persistent memory integrity check failed."
+                )
+
+            schema_version = payload.get("schema_version")
+
+            if schema_version != "HV_MEMORY_CORE_CANDIDATE_V1":
+                raise RuntimeError(
+                    "Unsupported persistent memory schema."
+                )
+
+            memory_id = payload.get("memory_id")
+
+            if (
+                not isinstance(memory_id, str)
+                or not memory_id.strip()
+            ):
+                raise RuntimeError(
+                    "Persistent memory memory_id is invalid."
+                )
+
+            if memory_id != snapshot.id:
+                raise RuntimeError(
+                    "Persistent memory document ID binding failed."
+                )
+
+            storage_authorized_by = payload.get(
+                "storage_authorized_by"
+            )
+
+            if storage_authorized_by != Actor.HUMAN.value:
+                raise RuntimeError(
+                    "Persistent memory storage authorization "
+                    "is not exactly HUMAN."
+                )
+
+            status = payload.get("status")
+
+            if status != "HUMAN_AUTHORIZED_FOR_STORAGE":
+                raise RuntimeError(
+                    "Persistent memory storage status is invalid."
+                )
+
+            authorized_effect = payload.get(
+                "authorized_effect"
+            )
+
+            if (
+                authorized_effect
+                !=
+                "NO_RECONSTRUCTION_EFFECT_UNTIL_LATER_HUMAN_REVIEW"
+            ):
+                raise RuntimeError(
+                    "Persistent storage must not grant "
+                    "reconstruction effect."
+                )
+
+            source_actor = payload.get("source_actor")
+
+            valid_actor_values = {
+                actor.value
+                for actor in Actor
+            }
+
+            if (
+                not isinstance(source_actor, str)
+                or source_actor not in valid_actor_values
+            ):
+                raise RuntimeError(
+                    "Persistent memory source_actor is invalid."
+                )
+
+            source_session_id = payload.get(
+                "source_session_id"
+            )
+
+            if (
+                not isinstance(source_session_id, str)
+                or not source_session_id.strip()
+            ):
+                raise RuntimeError(
+                    "Persistent memory source_session_id "
+                    "is required."
+                )
+
+            original_content = payload.get("content")
+
+            if (
+                not isinstance(original_content, str)
+                or not original_content.strip()
+            ):
+                raise RuntimeError(
+                    "Persistent memory content is required."
+                )
+
+            stored_provenance = payload.get("provenance")
+
+            if (
+                not isinstance(stored_provenance, str)
+                or not stored_provenance.strip()
+            ):
+                raise RuntimeError(
+                    "Persistent memory provenance is required."
+                )
+
+            created_at = payload.get("created_at")
+
+            if (
+                not isinstance(created_at, str)
+                or not created_at.strip()
+            ):
+                raise RuntimeError(
+                    "Persistent memory created_at is required."
+                )
+
+            candidates.append(
+                {
+                    "source_id": memory_id,
+                    "source_type": "FIRESTORE_PERSISTENT_MEMORY",
+                    "source_actor": source_actor,
+                    "source_session_id": source_session_id,
+                    "original_content": original_content,
+                    "provenance": stored_provenance,
+                    "retrieval_reason": (
+                        "Verified persistent Firestore memory "
+                        f"retrieved from {ref.path}; "
+                        f"stored_hash={stored_hash}; "
+                        f"query_basis={query_basis}"
+                    ),
+                    "relevance_score": None,
+                    "warnings": (
+                        "PERSISTED_STORAGE_IS_NOT_USAGE_AUTHORIZATION",
+                        "REQUIRES_EXISTING_HUMAN_MEMORY_REVIEW",
+                    ),
+                }
+            )
+
+    finally:
+        client.close()
+
+    if not candidates:
+        _orchestrator.record_memory_retrieval_outcome(
+            outcome="NO_RELEVANT_CANDIDATE_FOUND",
+            actor=Actor.MEMORY,
+            reason=(
+                "No verified persistent Firestore candidate was "
+                "produced from the explicitly requested document paths."
+            ),
+        )
+
+        return {
+            "outcome": "NO_RELEVANT_CANDIDATE_FOUND",
+            "query_basis": query_basis,
+            "candidate_count": 0,
+            "firestore_document_paths": normalized_paths,
+            "not_found_document_paths": not_found_paths,
+            "retrieval_outcome_recorded_in_core": True,
+            "human_resolution_performed": False,
+            "human_review_performed": False,
+            "memory_transfer_performed": False,
+            "reconstruction_effect_active": False,
+        }
+
+    artifact = _orchestrator.record_memory_candidates(
+        actor=Actor.MEMORY,
+        query_basis=query_basis,
+        candidates=candidates,
+    )
+
+    if is_dataclass(artifact):
+        artifact_data = asdict(artifact)
+    else:
+        artifact_data = {
+            "retrieval_id": getattr(
+                artifact,
+                "retrieval_id",
+                None,
+            ),
+            "status": getattr(
+                artifact,
+                "status",
+                None,
+            ),
+        }
+
+    return {
+        "outcome": "MEMORY_CANDIDATES_RECORDED",
+        "query_basis": query_basis,
+        "candidate_count": len(candidates),
+        "firestore_document_paths": normalized_paths,
+        "not_found_document_paths": not_found_paths,
+        "core_memory_retrieval_artifact": artifact_data,
+        "recorded_by_actor": Actor.MEMORY.value,
+        "human_resolution_performed": False,
+        "human_review_performed": False,
+        "memory_transfer_performed": False,
+        "reconstruction_effect_active": False,
+    }
