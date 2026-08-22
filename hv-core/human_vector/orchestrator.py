@@ -299,6 +299,109 @@ class HumanIterationDecision:
     content_hash: str
 
 
+
+def _hv_capability_hash(payload: dict) -> str:
+    import hashlib
+    import json
+
+    encoded = json.dumps(
+        payload,
+        sort_keys=True,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _hv_capability_artifact_hash(artifact) -> str:
+    from dataclasses import asdict
+
+    payload = asdict(artifact)
+    payload.pop("content_hash", None)
+    return _hv_capability_hash(payload)
+
+
+@dataclass(frozen=True)
+class HumanCapabilityBaseline:
+    baseline_id: str
+    session_id: str
+    direction_id: str
+    direction_confirmed_revision: int
+    direction_snapshot_hash: str
+    current_understanding: str
+    unobserved_or_uncertain: str
+    current_questions: str
+    current_reasoning: str
+    initial_decision_or_approach: str
+    actor: str
+    provenance: str
+    created_revision: int
+    content_hash: str
+
+
+@dataclass(frozen=True)
+class HumanCapabilityAssessment:
+    assessment_id: str
+    session_id: str
+    baseline_id: str
+    baseline_content_hash: str
+    comparison_id: str
+    candidate_version_id: str
+    candidate_content_hash: str
+    improved_understanding: str
+    errors_or_limits_detected: str
+    improved_questions: str
+    deeper_explanation: str
+    decision_reasoning: str
+    changed_criteria: str
+    actor: str
+    provenance: str
+    created_revision: int
+    content_hash: str
+
+
+@dataclass(frozen=True)
+class TransferTestEvidence:
+    transfer_test_id: str
+    session_id: str
+    assessment_id: str
+    assessment_content_hash: str
+    candidate_version_id: str
+    candidate_content_hash: str
+    new_problem: str
+    human_response: str
+    human_reasoning: str
+    capabilities_demonstrated: str
+    ai_solution_withheld: bool
+    actor: str
+    provenance: str
+    created_revision: int
+    content_hash: str
+
+
+@dataclass(frozen=True)
+class HumanCapabilityGainEvidence:
+    gain_evidence_id: str
+    session_id: str
+    baseline_id: str
+    baseline_content_hash: str
+    assessment_id: str
+    assessment_content_hash: str
+    transfer_test_id: str
+    transfer_test_content_hash: str
+    comparison_id: str
+    candidate_version_id: str
+    candidate_content_hash: str
+    observable_gain: str
+    remaining_limits: str
+    transfer_gain: str
+    actor: str
+    provenance: str
+    created_revision: int
+    content_hash: str
+
+
 @dataclass(frozen=True)
 class VFHumanDeclaration:
     selected_version: str
@@ -1186,6 +1289,26 @@ class SystemOrchestrator:
 
     human_iteration_decision_artifact: HumanIterationDecision | None = None
     human_iteration_decision_history: list[HumanIterationDecision] = field(
+        default_factory=list
+    )
+
+    human_capability_baseline_artifact: HumanCapabilityBaseline | None = None
+    human_capability_baseline_history: list[HumanCapabilityBaseline] = field(
+        default_factory=list
+    )
+
+    human_capability_assessment_artifact: HumanCapabilityAssessment | None = None
+    human_capability_assessment_history: list[HumanCapabilityAssessment] = field(
+        default_factory=list
+    )
+
+    transfer_test_evidence_artifact: TransferTestEvidence | None = None
+    transfer_test_evidence_history: list[TransferTestEvidence] = field(
+        default_factory=list
+    )
+
+    human_capability_gain_artifact: HumanCapabilityGainEvidence | None = None
+    human_capability_gain_history: list[HumanCapabilityGainEvidence] = field(
         default_factory=list
     )
     _human_iteration_decision_transition_authorization_hash: str | None = None
@@ -4672,6 +4795,630 @@ class SystemOrchestrator:
         )
 
 
+
+    def record_human_capability_baseline(
+        self,
+        *,
+        current_understanding: str,
+        unobserved_or_uncertain: str,
+        current_questions: str,
+        current_reasoning: str,
+        initial_decision_or_approach: str,
+        actor: Actor,
+    ) -> HumanCapabilityBaseline:
+        if self.state is not S.DIRECTION_LOCKED:
+            raise TransitionRejected(
+                "Human Capability Baseline requires DIRECTION_LOCKED."
+            )
+        if actor is not Actor.HUMAN:
+            raise TransitionRejected(
+                "Human Capability Baseline requires HUMAN actor."
+            )
+        if self.human_capability_baseline_artifact is not None:
+            raise TransitionRejected(
+                "Human Capability Baseline already exists."
+            )
+
+        values = {
+            "current_understanding": current_understanding,
+            "unobserved_or_uncertain": unobserved_or_uncertain,
+            "current_questions": current_questions,
+            "current_reasoning": current_reasoning,
+            "initial_decision_or_approach": initial_decision_or_approach,
+        }
+        missing = [
+            k for k, v in values.items()
+            if not isinstance(v, str) or not v.strip()
+        ]
+        if missing:
+            raise TransitionRejected(
+                "Human Capability Baseline missing: "
+                + ", ".join(sorted(missing))
+            )
+
+        direction = self.human_direction_artifact
+        if direction is None or getattr(direction, "status", None) != "CONFIRMED":
+            raise TransitionRejected(
+                "Human Capability Baseline requires confirmed Human Direction."
+            )
+
+        session_id = str(self.session_id or "").strip()
+        direction_id = getattr(direction, "direction_id", None)
+        confirmed_revision = getattr(direction, "confirmed_revision", None)
+
+        if not session_id:
+            raise TransitionRejected(
+                "Human Capability Baseline requires valid session_id."
+            )
+        if not isinstance(direction_id, str) or not direction_id.strip():
+            raise TransitionRejected(
+                "Human Capability Baseline requires valid direction_id."
+            )
+        if not isinstance(confirmed_revision, int) or confirmed_revision <= 0:
+            raise TransitionRejected(
+                "Human Capability Baseline requires valid confirmed revision."
+            )
+
+        from dataclasses import asdict
+        import uuid
+
+        baseline_id = str(uuid.uuid4())
+        direction_snapshot_hash = _hv_capability_hash(asdict(direction))
+
+        payload = {
+            "baseline_id": baseline_id,
+            "session_id": session_id,
+            "direction_id": direction_id,
+            "direction_confirmed_revision": confirmed_revision,
+            "direction_snapshot_hash": direction_snapshot_hash,
+            **values,
+            "actor": actor.value,
+            "provenance": "HUMAN",
+            "created_revision": self.revision,
+        }
+
+        artifact = HumanCapabilityBaseline(
+            **payload,
+            content_hash=_hv_capability_hash(payload),
+        )
+
+        self.human_capability_baseline_artifact = artifact
+        self.human_capability_baseline_history.append(artifact)
+        return artifact
+
+
+    def record_human_capability_assessment(
+        self,
+        *,
+        improved_understanding: str,
+        errors_or_limits_detected: str,
+        improved_questions: str,
+        deeper_explanation: str,
+        decision_reasoning: str,
+        changed_criteria: str,
+        actor: Actor,
+    ) -> HumanCapabilityAssessment:
+        if self.state is not S.HUMAN_VERIFICATION_REQUIRED:
+            raise TransitionRejected(
+                "Human Capability Assessment requires "
+                "HUMAN_VERIFICATION_REQUIRED."
+            )
+        if actor is not Actor.HUMAN:
+            raise TransitionRejected(
+                "Human Capability Assessment requires HUMAN actor."
+            )
+
+        baseline = self.human_capability_baseline_artifact
+        comparison = self.version_comparison_artifact
+
+        if baseline is None:
+            raise TransitionRejected("T1 requires persistent T0.")
+        if baseline.content_hash != _hv_capability_artifact_hash(baseline):
+            raise TransitionRejected("T0 integrity check failed.")
+        if baseline.session_id != str(self.session_id or ""):
+            raise TransitionRejected("T0 session binding failed.")
+
+        if (
+            comparison is None
+            or getattr(comparison, "status", None) != "GENERATED"
+        ):
+            raise TransitionRejected(
+                "T1 requires current generated Version Comparison."
+            )
+
+        candidate = self._find_result_version_by_id(
+            comparison.candidate_version_id
+        )
+        if candidate is None:
+            raise TransitionRejected(
+                "T1 comparison candidate is missing."
+            )
+        if candidate.content_hash != comparison.candidate_content_hash:
+            raise TransitionRejected(
+                "T1 comparison candidate integrity mismatch."
+            )
+
+        current = self.human_capability_assessment_artifact
+        if (
+            current is not None
+            and current.comparison_id == comparison.comparison_id
+        ):
+            raise TransitionRejected(
+                "T1 already exists for current comparison."
+            )
+
+        values = {
+            "improved_understanding": improved_understanding,
+            "errors_or_limits_detected": errors_or_limits_detected,
+            "improved_questions": improved_questions,
+            "deeper_explanation": deeper_explanation,
+            "decision_reasoning": decision_reasoning,
+            "changed_criteria": changed_criteria,
+        }
+        missing = [
+            k for k, v in values.items()
+            if not isinstance(v, str) or not v.strip()
+        ]
+        if missing:
+            raise TransitionRejected(
+                "Human Capability Assessment missing: "
+                + ", ".join(sorted(missing))
+            )
+
+        import uuid
+
+        assessment_id = str(uuid.uuid4())
+        payload = {
+            "assessment_id": assessment_id,
+            "session_id": str(self.session_id or ""),
+            "baseline_id": baseline.baseline_id,
+            "baseline_content_hash": baseline.content_hash,
+            "comparison_id": comparison.comparison_id,
+            "candidate_version_id": candidate.version_id,
+            "candidate_content_hash": candidate.content_hash,
+            **values,
+            "actor": actor.value,
+            "provenance": "HUMAN",
+            "created_revision": self.revision,
+        }
+
+        artifact = HumanCapabilityAssessment(
+            **payload,
+            content_hash=_hv_capability_hash(payload),
+        )
+
+        self.human_capability_assessment_artifact = artifact
+        self.human_capability_assessment_history.append(artifact)
+        return artifact
+
+
+    def record_transfer_test_evidence(
+        self,
+        *,
+        new_problem: str,
+        human_response: str,
+        human_reasoning: str,
+        capabilities_demonstrated: str,
+        ai_solution_withheld: bool,
+        actor: Actor,
+    ) -> TransferTestEvidence:
+        if self.state is not S.HUMAN_VERIFICATION_REQUIRED:
+            raise TransitionRejected(
+                "Transfer Test requires HUMAN_VERIFICATION_REQUIRED."
+            )
+        if actor is not Actor.HUMAN:
+            raise TransitionRejected(
+                "Transfer Test requires HUMAN actor."
+            )
+        if ai_solution_withheld is not True:
+            raise TransitionRejected(
+                "Transfer Test requires AI direct solution withheld."
+            )
+
+        assessment = self.human_capability_assessment_artifact
+        comparison = self.version_comparison_artifact
+
+        if assessment is None:
+            raise TransitionRejected("Transfer Test requires T1.")
+        if assessment.content_hash != _hv_capability_artifact_hash(assessment):
+            raise TransitionRejected("T1 integrity check failed.")
+        if assessment.session_id != str(self.session_id or ""):
+            raise TransitionRejected("T1 session binding failed.")
+        if comparison is None:
+            raise TransitionRejected(
+                "Transfer Test requires current comparison."
+            )
+
+        if (
+            assessment.comparison_id != comparison.comparison_id
+            or assessment.candidate_version_id
+                != comparison.candidate_version_id
+            or assessment.candidate_content_hash
+                != comparison.candidate_content_hash
+        ):
+            raise TransitionRejected(
+                "Transfer Test T1 is stale for current candidate."
+            )
+
+        current = self.transfer_test_evidence_artifact
+        if (
+            current is not None
+            and current.assessment_id == assessment.assessment_id
+        ):
+            raise TransitionRejected(
+                "Transfer Test already exists for current T1."
+            )
+
+        values = {
+            "new_problem": new_problem,
+            "human_response": human_response,
+            "human_reasoning": human_reasoning,
+            "capabilities_demonstrated": capabilities_demonstrated,
+        }
+        missing = [
+            k for k, v in values.items()
+            if not isinstance(v, str) or not v.strip()
+        ]
+        if missing:
+            raise TransitionRejected(
+                "Transfer Test missing: "
+                + ", ".join(sorted(missing))
+            )
+
+        import uuid
+
+        transfer_test_id = str(uuid.uuid4())
+        payload = {
+            "transfer_test_id": transfer_test_id,
+            "session_id": str(self.session_id or ""),
+            "assessment_id": assessment.assessment_id,
+            "assessment_content_hash": assessment.content_hash,
+            "candidate_version_id": assessment.candidate_version_id,
+            "candidate_content_hash": assessment.candidate_content_hash,
+            **values,
+            "ai_solution_withheld": True,
+            "actor": actor.value,
+            "provenance": "HUMAN",
+            "created_revision": self.revision,
+        }
+
+        artifact = TransferTestEvidence(
+            **payload,
+            content_hash=_hv_capability_hash(payload),
+        )
+
+        self.transfer_test_evidence_artifact = artifact
+        self.transfer_test_evidence_history.append(artifact)
+        return artifact
+
+
+    def record_human_capability_gain_evidence(
+        self,
+        *,
+        observable_gain: str,
+        remaining_limits: str,
+        transfer_gain: str,
+        actor: Actor,
+    ) -> HumanCapabilityGainEvidence:
+        if self.state is not S.HUMAN_VERIFICATION_REQUIRED:
+            raise TransitionRejected(
+                "Human Capability Gain requires "
+                "HUMAN_VERIFICATION_REQUIRED."
+            )
+        if actor is not Actor.HUMAN:
+            raise TransitionRejected(
+                "Human Capability Gain requires HUMAN actor."
+            )
+
+        baseline = self.human_capability_baseline_artifact
+        assessment = self.human_capability_assessment_artifact
+        transfer = self.transfer_test_evidence_artifact
+        comparison = self.version_comparison_artifact
+
+        if baseline is None or assessment is None or transfer is None:
+            raise TransitionRejected(
+                "Human Capability Gain requires T0, T1 and Transfer Test."
+            )
+        if comparison is None:
+            raise TransitionRejected(
+                "Human Capability Gain requires current comparison."
+            )
+
+        for name, artifact in (
+            ("T0", baseline),
+            ("T1", assessment),
+            ("Transfer Test", transfer),
+        ):
+            if artifact.content_hash != _hv_capability_artifact_hash(artifact):
+                raise TransitionRejected(
+                    f"{name} capability evidence integrity failed."
+                )
+            if artifact.session_id != str(self.session_id or ""):
+                raise TransitionRejected(
+                    f"{name} session binding failed."
+                )
+
+        if (
+            assessment.baseline_id != baseline.baseline_id
+            or assessment.baseline_content_hash != baseline.content_hash
+        ):
+            raise TransitionRejected(
+                "T1 is not bound to exact T0."
+            )
+
+        if (
+            transfer.assessment_id != assessment.assessment_id
+            or transfer.assessment_content_hash != assessment.content_hash
+        ):
+            raise TransitionRejected(
+                "Transfer Test is not bound to exact T1."
+            )
+
+        if (
+            assessment.comparison_id != comparison.comparison_id
+            or assessment.candidate_version_id
+                != comparison.candidate_version_id
+            or assessment.candidate_content_hash
+                != comparison.candidate_content_hash
+            or transfer.candidate_version_id
+                != comparison.candidate_version_id
+            or transfer.candidate_content_hash
+                != comparison.candidate_content_hash
+        ):
+            raise TransitionRejected(
+                "Capability evidence is stale for current candidate."
+            )
+
+        current = self.human_capability_gain_artifact
+        if (
+            current is not None
+            and current.assessment_id == assessment.assessment_id
+            and current.transfer_test_id == transfer.transfer_test_id
+        ):
+            raise TransitionRejected(
+                "Human Capability Gain already exists for current T1."
+            )
+
+        values = {
+            "observable_gain": observable_gain,
+            "remaining_limits": remaining_limits,
+            "transfer_gain": transfer_gain,
+        }
+        missing = [
+            k for k, v in values.items()
+            if not isinstance(v, str) or not v.strip()
+        ]
+        if missing:
+            raise TransitionRejected(
+                "Human Capability Gain missing: "
+                + ", ".join(sorted(missing))
+            )
+
+        import uuid
+
+        gain_evidence_id = str(uuid.uuid4())
+        payload = {
+            "gain_evidence_id": gain_evidence_id,
+            "session_id": str(self.session_id or ""),
+            "baseline_id": baseline.baseline_id,
+            "baseline_content_hash": baseline.content_hash,
+            "assessment_id": assessment.assessment_id,
+            "assessment_content_hash": assessment.content_hash,
+            "transfer_test_id": transfer.transfer_test_id,
+            "transfer_test_content_hash": transfer.content_hash,
+            "comparison_id": comparison.comparison_id,
+            "candidate_version_id": assessment.candidate_version_id,
+            "candidate_content_hash": assessment.candidate_content_hash,
+            **values,
+            "actor": actor.value,
+            "provenance": "HUMAN",
+            "created_revision": self.revision,
+        }
+
+        artifact = HumanCapabilityGainEvidence(
+            **payload,
+            content_hash=_hv_capability_hash(payload),
+        )
+
+        self.human_capability_gain_artifact = artifact
+        self.human_capability_gain_history.append(artifact)
+        return artifact
+
+
+    def _bind_current_human_capability_delta(
+        self,
+        iteration_context: dict | None,
+    ) -> dict | None:
+        if iteration_context is None:
+            return None
+        if not isinstance(iteration_context, dict):
+            raise TransitionRejected(
+                "Iteration context must be a dict."
+            )
+
+        decision = self.human_iteration_decision_artifact
+        if decision is None:
+            raise TransitionRejected(
+                "Iteration context requires HumanIterationDecision."
+            )
+
+        self._validate_human_iteration_decision_integrity(decision)
+
+        parent = self._find_result_version_by_id(
+            decision.base_version_id
+        )
+        if parent is None:
+            raise TransitionRejected(
+                "Immediate iteration parent is missing."
+            )
+        if parent.content_hash != decision.base_version_content_hash:
+            raise TransitionRejected(
+                "Immediate iteration parent integrity mismatch."
+            )
+
+        # Accept only known parent aliases for validation.
+        for key in (
+            "base_version_id",
+            "parent_version_id",
+            "iteration_base_version_id",
+        ):
+            value = iteration_context.get(key)
+            if value is not None and value != decision.base_version_id:
+                raise TransitionRejected(
+                    f"Iteration context {key} mismatch."
+                )
+
+        for key in (
+            "base_version_content_hash",
+            "parent_version_content_hash",
+            "iteration_base_version_content_hash",
+        ):
+            value = iteration_context.get(key)
+            if (
+                value is not None
+                and value != decision.base_version_content_hash
+            ):
+                raise TransitionRejected(
+                    f"Iteration context {key} mismatch."
+                )
+
+        # Rebuild from a whitelist. No arbitrary historical context survives.
+        result = {
+            "base_version_id": decision.base_version_id,
+            "base_version_label": parent.version_label,
+            "base_version_content_hash":
+                decision.base_version_content_hash,
+
+            "parent_version_id": decision.base_version_id,
+            "parent_version_content_hash":
+                decision.base_version_content_hash,
+
+            "iteration_base_version_id": decision.base_version_id,
+            "iteration_base_version_label": parent.version_label,
+            "iteration_base_version_content_hash":
+                decision.base_version_content_hash,
+
+            "decision_id": decision.decision_id,
+            "decision_content_hash": decision.content_hash,
+            "reason": decision.reason,
+            "evolved_criteria": decision.evolved_criteria,
+            "requested_changes": decision.requested_changes,
+        }
+
+        baseline = self.human_capability_baseline_artifact
+
+        # Sessions that never opened T0 keep the canonical consecutive route.
+        if baseline is None:
+            return result
+
+        assessment = self.human_capability_assessment_artifact
+        transfer = self.transfer_test_evidence_artifact
+        gain = self.human_capability_gain_artifact
+
+        # Once T0 exists, Human Capability Gain route is fail-closed.
+        if assessment is None or transfer is None or gain is None:
+            raise TransitionRejected(
+                "T0-activated route requires T1, Transfer Test "
+                "and Human Capability Gain."
+            )
+
+        for name, artifact in (
+            ("T0", baseline),
+            ("T1", assessment),
+            ("Transfer Test", transfer),
+            ("Human Capability Gain", gain),
+        ):
+            if artifact.content_hash != _hv_capability_artifact_hash(artifact):
+                raise TransitionRejected(
+                    f"{name} integrity failed before reconstruction."
+                )
+            if artifact.session_id != str(self.session_id or ""):
+                raise TransitionRejected(
+                    f"{name} session binding failed before reconstruction."
+                )
+
+        if (
+            assessment.baseline_id != baseline.baseline_id
+            or assessment.baseline_content_hash != baseline.content_hash
+        ):
+            raise TransitionRejected(
+                "T1/T0 lineage mismatch."
+            )
+
+        if (
+            transfer.assessment_id != assessment.assessment_id
+            or transfer.assessment_content_hash != assessment.content_hash
+        ):
+            raise TransitionRejected(
+                "Transfer Test/T1 lineage mismatch."
+            )
+
+        if (
+            gain.assessment_id != assessment.assessment_id
+            or gain.assessment_content_hash != assessment.content_hash
+            or gain.transfer_test_id != transfer.transfer_test_id
+            or gain.transfer_test_content_hash != transfer.content_hash
+        ):
+            raise TransitionRejected(
+                "Human Capability Gain lineage mismatch."
+            )
+
+        for artifact_name, artifact in (
+            ("T1", assessment),
+            ("Transfer Test", transfer),
+            ("Human Capability Gain", gain),
+        ):
+            if (
+                artifact.candidate_version_id
+                    != decision.base_version_id
+                or artifact.candidate_content_hash
+                    != decision.base_version_content_hash
+            ):
+                raise TransitionRejected(
+                    f"{artifact_name} is stale for immediate parent."
+                )
+
+        # IMPORTANT:
+        # T0 content is longitudinal evidence only.
+        # The Vn→Vn+1 causal payload contains only current HUMAN delta.
+        result["human_capability_delta"] = {
+            "parent_version_id": decision.base_version_id,
+            "parent_version_content_hash":
+                decision.base_version_content_hash,
+
+            "assessment_id": assessment.assessment_id,
+            "assessment_content_hash": assessment.content_hash,
+
+            "transfer_test_id": transfer.transfer_test_id,
+            "transfer_test_content_hash": transfer.content_hash,
+
+            "gain_evidence_id": gain.gain_evidence_id,
+            "gain_evidence_content_hash": gain.content_hash,
+
+            "improved_understanding":
+                assessment.improved_understanding,
+            "deeper_explanation":
+                assessment.deeper_explanation,
+            "decision_reasoning":
+                assessment.decision_reasoning,
+            "changed_criteria":
+                assessment.changed_criteria,
+            "errors_or_limits_detected":
+                assessment.errors_or_limits_detected,
+            "improved_questions":
+                assessment.improved_questions,
+
+            "observable_gain":
+                gain.observable_gain,
+            "transfer_gain":
+                gain.transfer_gain,
+            "remaining_limits":
+                gain.remaining_limits,
+        }
+
+        return result
+
+
     def _resolve_final_reconstruction_iteration_context(self) -> dict[str, str] | None:
         state_value = getattr(self.state, "value", self.state)
 
@@ -5409,7 +6156,7 @@ class SystemOrchestrator:
             iteration_base_version_content_hash=
                 sources["iteration_base_version_content_hash"],
             human_iteration_context=
-                sources["human_iteration_context"],
+                self._bind_current_human_capability_delta(sources["human_iteration_context"]),
         )
 
         package = _hv_rc_replace(

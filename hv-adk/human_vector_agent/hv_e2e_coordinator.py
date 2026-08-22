@@ -116,7 +116,7 @@ _HUMAN_GATES: dict[str, tuple[str, str]] = {
     ),
     "HUMAN_VERIFICATION_REQUIRED": (
         "HUMAN_VERIFICATION",
-        "HUMAN must compare the reconstructed candidate against V1 and the confirmed direction.",
+        "HUMAN must compare the reconstructed candidate against its immediate verified parent/base version and the confirmed direction.",
     ),
     "VF_HUMAN_DECLARATION": (
         "VF",
