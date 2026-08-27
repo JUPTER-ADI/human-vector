@@ -166,3 +166,11 @@ The intended outcome is:
 a stronger solution + a more capable HUMAN + more effective agentic collaboration, with final authority preserved by HUMAN.
 
 This is HUMAN VECTOR — Human Capability Gain Through Reciprocal Human–AI Cognitive Challenge.
+
+---
+
+## Project Documentation
+
+- [Current Architecture](docs/CURRENT_ARCHITECTURE.md)
+- [Reproducibility](docs/REPRODUCIBILITY.md)
+- [Pre-existing Work Disclosure](docs/PRE_EXISTING_WORK_DISCLOSURE.md)
