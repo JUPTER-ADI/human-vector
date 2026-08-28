@@ -169,6 +169,40 @@ This is HUMAN VECTOR — Human Capability Gain Through Reciprocal Human–AI Cog
 
 ---
 
+## Reproduce / Spin Up
+
+### Application layer
+
+```bash
+npm install
+npm run build
+npm run start
+```
+
+For development:
+
+```bash
+npm run dev
+```
+
+### ADK service
+
+Python dependencies are defined in `hv-adk/requirements.txt`.
+
+```bash
+python3 -m pip install -r hv-adk/requirements.txt
+```
+
+The containerized runtime starts the ADK API server on port 8080.
+
+### Credentials and Google Cloud configuration
+
+Runtime credentials are not committed to this repository.
+
+The validated Google Cloud deployment supplies the Gemini credential through Google Secret Manager. A reviewer reproducing the system must provide their own valid Gemini credential and the required Google Cloud configuration.
+
+For the complete reproducibility notes and validated runtime evidence, see [Reproducibility](docs/REPRODUCIBILITY.md).
+
 ## Project Documentation
 
 - [Current Architecture](docs/CURRENT_ARCHITECTURE.md)
