@@ -53,6 +53,71 @@ def create_human_vector_session(
     }
 
 
+
+class PersistSessionRequest(BaseModel):
+    user_id: str
+    path: str
+
+
+@app.post("/human-vector/sessions/{session_id}/persist")
+def persist_human_vector_session(
+    session_id: str,
+    request: PersistSessionRequest,
+) -> dict[str, object]:
+    from fastapi import HTTPException
+
+    try:
+        session_controller.require_session_for_user(
+            session_id=session_id,
+            user_id=request.user_id,
+        )
+        session_controller.save_session(
+            session_id=session_id,
+            path=request.path,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    return {
+        "ok": True,
+        "session_id": session_id,
+        "persisted": True,
+        "path": request.path,
+    }
+
+
+
+class LoadSessionRequest(BaseModel):
+    path: str
+
+
+@app.post("/human-vector/sessions/load")
+def load_human_vector_session(
+    request: LoadSessionRequest,
+) -> dict[str, object]:
+    from fastapi import HTTPException
+
+    try:
+        context = session_controller.load_session(request.path)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {
+        "ok": True,
+        "session_id": context.session_id,
+        "user_id": context.user_id,
+        "actor_id": context.actor_id,
+        "actor_role": context.actor_role,
+        "state": context.orchestrator.state.value,
+        "revision": context.orchestrator.revision,
+        "loaded": True,
+    }
+
+
 @app.get("/human-vector/sessions/{session_id}")
 def get_human_vector_session(
     session_id: str,

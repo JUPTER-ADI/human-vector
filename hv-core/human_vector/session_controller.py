@@ -3,7 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .orchestrator import SystemOrchestrator
-from .session_persistence import build_session_envelope, ensure_session_id
+from .session_persistence import (
+    build_session_envelope,
+    ensure_session_id,
+    load_session_envelope,
+    save_session_envelope,
+)
 
 
 @dataclass
@@ -31,6 +36,31 @@ class SessionController:
 
     def __init__(self) -> None:
         self._sessions: dict[str, SessionContext] = {}
+
+    def save_session(self, session_id: str, path: str) -> None:
+        context = self.require_session(session_id)
+        save_session_envelope(
+            context.orchestrator,
+            path,
+            user_id=context.user_id,
+            actor_id=context.actor_id,
+            actor_role=context.actor_role,
+        )
+
+    def load_session(self, path: str) -> SessionContext:
+        loaded = load_session_envelope(path)
+        identity = loaded["identity"]
+        orchestrator = loaded["orchestrator"]
+
+        context = SessionContext(
+            user_id=identity["user_id"],
+            actor_id=identity["actor_id"],
+            actor_role=identity["actor_role"],
+            orchestrator=orchestrator,
+        )
+
+        self._sessions[context.session_id] = context
+        return context
 
     def create_session(
         self,
