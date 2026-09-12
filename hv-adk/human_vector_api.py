@@ -168,3 +168,68 @@ def close_human_vector_session(
         "session_id": session_id,
         "closed": True,
     }
+
+@app.get("/human-vector/sessions/{session_id}/results")
+def get_human_vector_session_results(
+    session_id: str,
+    user_id: str,
+) -> dict[str, object]:
+    from dataclasses import asdict, is_dataclass
+    from fastapi import HTTPException
+
+    try:
+        context = session_controller.require_session_for_user(
+            session_id=session_id,
+            user_id=user_id,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    orchestrator = context.orchestrator
+
+    def serialize_artifact(value: object) -> object:
+        if value is None:
+            return None
+        if is_dataclass(value):
+            return asdict(value)
+        return value
+
+    baseline = getattr(
+        orchestrator,
+        "human_capability_baseline_artifact",
+        None,
+    )
+    assessment = getattr(
+        orchestrator,
+        "human_capability_assessment_artifact",
+        None,
+    )
+    gain = getattr(
+        orchestrator,
+        "human_capability_gain_artifact",
+        None,
+    )
+
+    return {
+        "ok": True,
+        "session_id": context.session_id,
+        "user_id": context.user_id,
+        "state": orchestrator.state.value,
+        "revision": orchestrator.revision,
+        "human_capability": {
+            "baseline": serialize_artifact(baseline),
+            "assessment": serialize_artifact(assessment),
+            "gain_evidence": serialize_artifact(gain),
+            "baseline_available": baseline is not None,
+            "assessment_available": assessment is not None,
+            "gain_evidence_available": gain is not None,
+        },
+        "final_report_available": getattr(
+            orchestrator,
+            "final_report",
+            None,
+        ) is not None,
+    }
+
