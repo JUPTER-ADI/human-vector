@@ -146,28 +146,32 @@ export default function Home() {
     setSaveMessage("Saving verified HUMAN VECTOR session...");
 
     try {
-      const response = await fetch("/api/sessions", {
+      const response = await fetch("/api/human-vector/sessions", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          objective: cleanObjective,
-          analysis: aiAnalysis.trim(),
-          decision: humanDecision.trim(),
+          user_id: "ui-local-human",
+          actor_id: "ui-local-human",
+          actor_role: "HUMAN",
         }),
       });
 
-      const data = (await response.json()) as SessionsResponse;
+      const data = (await response.json()) as {
+        ok?: boolean;
+        session_id?: string;
+        user_id?: string;
+        actor_id?: string;
+        actor_role?: string;
+        state?: string;
+        revision?: number;
+        detail?: string;
+      };
 
-      if (!response.ok || !data.ok || !data.session) {
-        throw new Error(data.status || "SESSION_SAVE_FAILED");
+      if (!response.ok || !data.ok || !data.session_id) {
+        throw new Error(data.detail || "HUMAN_VECTOR_SESSION_CREATE_FAILED");
       }
-
-      setSessions((currentSessions) => [
-        data.session as HumanVectorSession,
-        ...currentSessions,
-      ]);
 
       setObjective("");
       setAiAnalysis("");
@@ -175,7 +179,7 @@ export default function Home() {
 
       setSaveStatus("success");
       setSaveMessage(
-        "Sesiunea a fost salvată și verificată în CockroachDB.",
+        `Sesiune HUMAN VECTOR creată în CORE: ${data.session_id}`,
       );
     } catch (error) {
       console.error("Saving session failed:", error);
