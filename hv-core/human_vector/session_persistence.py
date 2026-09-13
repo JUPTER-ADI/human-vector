@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import hashlib
+import json
+
 from dataclasses import asdict, fields
 from typing import Any
 
@@ -38,6 +41,12 @@ def declared_orchestrator_fields() -> set[str]:
     return {field_info.name for field_info in fields(SystemOrchestrator)}
 
 
+
+def _session_envelope_digest(identity: dict[str, str], snapshot: dict[str, object]) -> str:
+    payload = {"identity": identity, "snapshot": snapshot}
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
 def build_session_envelope(
     orchestrator: SystemOrchestrator,
     *,
@@ -55,15 +64,19 @@ def build_session_envelope(
 
     session_id = ensure_session_id(orchestrator)
 
+    identity = {
+        "user_id": user_id,
+        "session_id": session_id,
+        "actor_id": actor_id,
+        "actor_role": actor_role,
+    }
+    snapshot = build_session_snapshot(orchestrator)
+
     return {
         "schema_version": SCHEMA_VERSION,
-        "identity": {
-            "user_id": user_id,
-            "session_id": session_id,
-            "actor_id": actor_id,
-            "actor_role": actor_role,
-        },
-        "snapshot": build_session_snapshot(orchestrator),
+        "identity": identity,
+        "snapshot": snapshot,
+        "integrity_digest": _session_envelope_digest(identity, snapshot),
     }
 
 
@@ -171,7 +184,6 @@ def restore_session_snapshot(snapshot: dict[str, Any]) -> SystemOrchestrator:
     return orchestrator
 
 
-import json
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 
@@ -276,7 +288,15 @@ def load_session_envelope(path: str | Path) -> dict[str, Any]:
             + ",".join(sorted(missing_identity))
         )
 
-    orchestrator = restore_session_snapshot(envelope.get("snapshot"))
+    snapshot = envelope.get("snapshot")
+    integrity_digest = envelope.get("integrity_digest")
+    if not isinstance(integrity_digest, str) or not integrity_digest:
+        raise ValueError("Session envelope integrity digest is required")
+    expected_digest = _session_envelope_digest(identity, snapshot)
+    if integrity_digest != expected_digest:
+        raise ValueError("Session envelope integrity check failed")
+
+    orchestrator = restore_session_snapshot(snapshot)
 
     if identity["session_id"] != orchestrator.session_id:
         raise ValueError("Session identity does not match CORE snapshot")
