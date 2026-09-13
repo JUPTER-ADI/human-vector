@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from fastapi import HTTPException
 from google.adk.cli.fast_api import get_fast_api_app
 
 
@@ -64,7 +65,6 @@ def persist_human_vector_session(
     session_id: str,
     request: PersistSessionRequest,
 ) -> dict[str, object]:
-    from fastapi import HTTPException
 
     try:
         session_controller.require_session_for_user(
@@ -97,7 +97,6 @@ class LoadSessionRequest(BaseModel):
 def load_human_vector_session(
     request: LoadSessionRequest,
 ) -> dict[str, object]:
-    from fastapi import HTTPException
 
     try:
         context = session_controller.load_session(request.path)
@@ -123,7 +122,6 @@ def get_human_vector_session(
     session_id: str,
     user_id: str,
 ) -> dict[str, object]:
-    from fastapi import HTTPException
 
     try:
         context = session_controller.require_session_for_user(
@@ -151,7 +149,6 @@ def close_human_vector_session(
     session_id: str,
     user_id: str,
 ) -> dict[str, object]:
-    from fastapi import HTTPException
 
     try:
         session_controller.close_session_for_user(
@@ -169,13 +166,50 @@ def close_human_vector_session(
         "closed": True,
     }
 
+@app.post("/human-vector/sessions/{session_id}/direction")
+async def record_human_vector_direction(
+    session_id: str,
+    payload: dict[str, object],
+):
+    user_id = str(payload.get("user_id", "")).strip()
+    if not user_id:
+        raise HTTPException(status_code=400, detail="USER_ID_REQUIRED")
+
+    context = session_controller.require_session_for_user(
+        session_id=session_id,
+        user_id=user_id,
+    )
+    orchestrator = context.orchestrator
+
+    from human_vector.orchestrator import Actor
+    from human_vector.states import HumanVectorState as S
+
+    if orchestrator.state is not S.DIRECTION_DRAFT:
+        orchestrator.transition(S.DIRECTION_DRAFT, Actor.ORCHESTRATOR)
+
+    direction = orchestrator.record_human_direction_draft(
+        objective=str(payload.get("objective", "")).strip(),
+        context=str(payload.get("context", "")).strip(),
+        criteria=str(payload.get("criteria", "")).strip(),
+        limits=str(payload.get("limits", "")).strip(),
+        actor=Actor.HUMAN,
+    )
+
+    return {
+        "ok": True,
+        "session_id": session_id,
+        "state": orchestrator.state.value,
+        "revision": orchestrator.revision,
+        "direction_type": type(direction).__name__,
+    }
+
+
 @app.get("/human-vector/sessions/{session_id}/results")
 def get_human_vector_session_results(
     session_id: str,
     user_id: str,
 ) -> dict[str, object]:
     from dataclasses import asdict, is_dataclass
-    from fastapi import HTTPException
 
     try:
         context = session_controller.require_session_for_user(
