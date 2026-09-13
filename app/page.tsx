@@ -60,6 +60,8 @@ export default function Home() {
   const [objective, setObjective] = useState("");
   const [aiAnalysis, setAiAnalysis] = useState("");
   const [humanDecision, setHumanDecision] = useState("");
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [sessionResults, setSessionResults] = useState<unknown>(null);
 
   const [saveStatus, setSaveStatus] =
     useState<SaveStatus>("idle");
@@ -173,7 +175,9 @@ export default function Home() {
         throw new Error(data.detail || "HUMAN_VECTOR_SESSION_CREATE_FAILED");
       }
 
-      setObjective("");
+      setSessionId(data.session_id);
+    await loadHumanVectorResults(data.session_id);
+    setObjective("");
       setAiAnalysis("");
       setHumanDecision("");
 
@@ -186,6 +190,26 @@ export default function Home() {
       setSaveStatus("error");
       setSaveMessage("Salvarea a eșuat — verifică Terminalul.");
     }
+  }
+
+  async function loadHumanVectorResults(targetSessionId?: string) {
+    const activeSessionId = targetSessionId ?? sessionId;
+    if (!activeSessionId) {
+      return;
+    }
+
+    const response = await fetch(
+      `/api/human-vector/sessions/${activeSessionId}/results?user_id=ui-local-human`,
+      { cache: "no-store" }
+    );
+
+    if (!response.ok) {
+      throw new Error("HUMAN_VECTOR_RESULTS_READ_FAILED");
+    }
+
+    const data = await response.json();
+    setSessionResults(data);
+    return data;
   }
 
   const healthButtonLabel =
@@ -366,6 +390,16 @@ export default function Home() {
                 }`}
               >
                 {saveMessage}
+              {sessionResults !== null && (
+                <div className="mt-4 rounded-2xl border border-cyan-300/30 bg-cyan-300/10 p-4">
+                  <p className="text-xs font-semibold tracking-[0.3em] text-cyan-300">
+                    LIVE CORE SESSION RESULT
+                  </p>
+                  <pre className="mt-3 overflow-x-auto whitespace-pre-wrap break-words text-xs text-slate-300">
+                    {JSON.stringify(sessionResults, null, 2)}
+                  </pre>
+                </div>
+              )}
               </div>
             </div>
           </form>
