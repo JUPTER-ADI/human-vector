@@ -10,6 +10,12 @@ app = get_fast_api_app(
 )
 
 
+from human_vector_agent.hv_core_bridge import (
+    bind_orchestrator,
+    advance_to_builder_v1_running,
+    prepare_builder_v1_direction,
+)
+
 @app.get("/human-vector/health")
 def human_vector_health() -> dict[str, object]:
     return {
@@ -22,6 +28,7 @@ def human_vector_health() -> dict[str, object]:
 from pydantic import BaseModel
 
 from human_vector.session_controller import SessionController
+from human_vector.orchestrator import S, Actor
 
 
 session_controller = SessionController()
@@ -207,6 +214,185 @@ async def record_human_vector_direction(
         "state": orchestrator.state.value,
         "revision": orchestrator.revision,
         "direction_type": type(direction).__name__,
+    }
+
+
+
+@app.post("/human-vector/sessions/{session_id}/direction/confirm")
+def confirm_human_vector_direction(
+    session_id: str,
+    payload: dict[str, object],
+) -> dict[str, object]:
+    user_id = str(payload.get("user_id", "")).strip()
+    if not user_id:
+        raise HTTPException(status_code=400, detail="user_id is required")
+
+    try:
+        context = session_controller.require_session_for_user(
+            session_id=session_id,
+            user_id=user_id,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    orchestrator = context.orchestrator
+
+    try:
+        if orchestrator.state is S.DIRECTION_DRAFT:
+            orchestrator.transition(
+                S.DIRECTION_VALIDATION_REQUIRED,
+                Actor.ORCHESTRATOR,
+            )
+
+        if orchestrator.state is S.DIRECTION_VALIDATION_REQUIRED:
+            orchestrator.transition(
+                S.DIRECTION_CONFIRMATION_REQUIRED,
+                Actor.ORCHESTRATOR,
+            )
+
+        direction = orchestrator.confirm_human_direction(
+            actor=Actor.HUMAN,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return {
+        "ok": True,
+        "session_id": session_id,
+        "user_id": context.user_id,
+        "state": orchestrator.state.value,
+        "revision": orchestrator.revision,
+        "direction_status": direction.status,
+        "final_authority": "HUMAN",
+    }
+
+
+
+@app.post("/human-vector/sessions/{session_id}/builder-v1")
+async def run_human_vector_builder_v1(session_id: str, payload: dict):
+    try:
+        context = session_controller.require_session(session_id)
+        session_controller.require_session_for_user(session_id=session_id, user_id=payload["user_id"])
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    orchestrator = context.orchestrator
+
+    try:
+        bind_orchestrator(orchestrator)
+        advance_result = advance_to_builder_v1_running()
+        if not advance_result.get("ok"):
+            raise RuntimeError(
+                advance_result.get("reason", "Builder V1 advance failed")
+            )
+        if orchestrator.state is not S.BUILDER_V1_RUNNING:
+            raise RuntimeError(
+                f"Builder V1 advance failed: state={orchestrator.state.value}"
+            )
+        class _BuilderV1ApiToolContext:
+            def __init__(self):
+                self.state = {}
+
+        builder_tool_context = _BuilderV1ApiToolContext()
+        builder_input = prepare_builder_v1_direction(builder_tool_context)
+    except Exception as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return {
+        "ok": True,
+        "session_id": context.session_id,
+        "user_id": context.user_id,
+        "state": orchestrator.state.value,
+        "revision": orchestrator.revision,
+        "builder_v1_ready": True,
+        "builder_input": builder_input,
+        "required_next_operation": "ADK_BUILDER_V1",
+        "human_authority_preserved": True,
+    }
+
+
+
+@app.post("/human-vector/sessions/{session_id}/conflict-space")
+def build_human_vector_conflict_space(
+    session_id: str,
+    user_id: str,
+) -> dict[str, object]:
+    from dataclasses import asdict
+
+    try:
+        context = session_controller.require_session_for_user(
+            session_id=session_id,
+            user_id=user_id,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    orchestrator = context.orchestrator
+
+    try:
+        space = orchestrator.build_conflict_space(actor=Actor.SYSTEM)
+        orchestrator.open_human_critic_selection(actor=Actor.ORCHESTRATOR)
+    except Exception as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return {
+        "ok": True,
+        "session_id": context.session_id,
+        "user_id": context.user_id,
+        "state": orchestrator.state.value,
+        "revision": orchestrator.revision,
+        "conflict_space": asdict(space),
+        "required_next_operation": "HUMAN_CRITIC_SELECTION",
+        "final_authority": "HUMAN",
+    }
+
+
+class HumanCriticSelectionRequest(BaseModel):
+    decisions: list[dict[str, str]]
+
+
+@app.post("/human-vector/sessions/{session_id}/critic-selection")
+def record_human_vector_critic_selection(
+    session_id: str,
+    user_id: str,
+    payload: HumanCriticSelectionRequest,
+) -> dict[str, object]:
+    from dataclasses import asdict
+
+    try:
+        context = session_controller.require_session_for_user(
+            session_id=session_id,
+            user_id=user_id,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    orchestrator = context.orchestrator
+
+    try:
+        selection = orchestrator.record_human_critic_selection(
+            actor=Actor.HUMAN,
+            decisions=payload.decisions,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return {
+        "ok": True,
+        "session_id": context.session_id,
+        "user_id": context.user_id,
+        "state": orchestrator.state.value,
+        "revision": orchestrator.revision,
+        "human_critic_selection": asdict(selection),
+        "final_authority": "HUMAN",
     }
 
 
