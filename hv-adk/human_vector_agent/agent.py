@@ -20,7 +20,7 @@ from .hv_core_bridge import (
 
 builder_v1_agent = Agent(
     name="human_vector_builder_v1",
-    model="gemini-3.5-flash",
+    model="gemini-2.5-flash",
     description=(
         "HUMAN VECTOR Builder AI. Constructs V1 only; "
         "it never performs the HUMAN cognitive response or final decision."
@@ -59,7 +59,7 @@ builder_v1_tool = AgentTool(
 
 builder_vn_agent = Agent(
     name="human_vector_builder_vn",
-    model="gemini-3.5-flash",
+    model="gemini-2.5-flash",
     description=(
         "HUMAN VECTOR reconstruction Builder. Produces the next "
         "candidate version only from the exact locked Final "
@@ -105,7 +105,7 @@ builder_vn_tool = AgentTool(agent=builder_vn_agent)
 
 critic_v1_agent = Agent(
     name="human_vector_critic_v1",
-    model="gemini-3.5-flash",
+    model="gemini-2.5-flash",
     description=(
         "Independent HUMAN VECTOR Critic AI. "
         "Challenges Builder V1 and the HUMAN cognitive response "
@@ -154,7 +154,7 @@ critic_v1_tool = AgentTool(
 
 root_agent = Agent(
     name="human_vector_agent",
-    model="gemini-3.5-flash",
+    model="gemini-2.5-flash",
     description="HUMAN VECTOR Google ADK entry agent.",
     instruction=(
         "You are the Google ADK entry agent for HUMAN VECTOR. "

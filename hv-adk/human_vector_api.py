@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from google.adk.runners import InMemoryRunner
+from google.genai import types
+from human_vector_agent.agent import builder_v1_agent
+
 from fastapi import HTTPException
 from google.adk.cli.fast_api import get_fast_api_app
 
@@ -299,6 +303,36 @@ async def run_human_vector_builder_v1(session_id: str, payload: dict):
 
         builder_tool_context = _BuilderV1ApiToolContext()
         builder_input = prepare_builder_v1_direction(builder_tool_context)
+
+        runner = InMemoryRunner(agent=builder_v1_agent)
+        adk_session = await runner.session_service.create_session(
+            app_name=runner.app_name,
+            user_id=context.user_id,
+            state={
+                "hv_builder_direction_package": builder_tool_context.state[
+                    "hv_builder_direction_package"
+                ]
+            },
+        )
+        message = types.Content(
+            role="user",
+            parts=[types.Part(text=builder_tool_context.state["hv_builder_direction_package"])],
+        )
+        async for _event in runner.run_async(
+            user_id=context.user_id,
+            session_id=adk_session.id,
+            new_message=message,
+        ):
+            pass
+
+        builder_output = await runner.session_service.get_session(
+            app_name=runner.app_name,
+            user_id=context.user_id,
+            session_id=adk_session.id,
+        )
+        builder_output = builder_output.state.get("hv_builder_v1_output")
+        if not builder_output:
+            raise RuntimeError("Builder V1 produced no exact ADK session output")
     except Exception as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
