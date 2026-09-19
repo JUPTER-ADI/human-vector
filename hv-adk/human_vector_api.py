@@ -303,6 +303,7 @@ async def run_human_vector_builder_v1(session_id: str, payload: dict):
                 self.state = {}
 
         builder_tool_context = _BuilderV1ApiToolContext()
+        builder_tool_context.state["hv_core_session_id"] = context.session_id
         builder_input = prepare_builder_v1_direction(builder_tool_context)
 
         runner = InMemoryRunner(agent=builder_v1_agent)
@@ -313,7 +314,8 @@ async def run_human_vector_builder_v1(session_id: str, payload: dict):
                 "hv_builder_direction_package": builder_tool_context.state[
                     "hv_builder_direction_package"
                 ]
-            },
+            ,
+            "hv_core_session_id": context.session_id,},
         )
         message = types.Content(
             role="user",
@@ -454,6 +456,8 @@ class HumanCriticSelectionRequest(BaseModel):
     decisions: list[dict[str, str]]
 
 
+
+@app.post("/human-vector/sessions/{session_id}/critic")
 @app.post("/human-vector/sessions/{session_id}/critic-selection")
 def record_human_vector_critic_selection(
     session_id: str,
