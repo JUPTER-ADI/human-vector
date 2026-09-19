@@ -18,6 +18,7 @@ from human_vector_agent.hv_core_bridge import (
     bind_orchestrator,
     advance_to_builder_v1_running,
     prepare_builder_v1_direction,
+    record_builder_v1_from_state,
 )
 
 @app.get("/human-vector/health")
@@ -32,7 +33,7 @@ def human_vector_health() -> dict[str, object]:
 from pydantic import BaseModel
 
 from human_vector.session_controller import SessionController
-from human_vector.orchestrator import S, Actor
+from human_vector.orchestrator import S, Actor, TransitionRejected
 
 
 session_controller = SessionController()
@@ -333,6 +334,13 @@ async def run_human_vector_builder_v1(session_id: str, payload: dict):
         builder_output = builder_output.state.get("hv_builder_v1_output")
         if not builder_output:
             raise RuntimeError("Builder V1 produced no exact ADK session output")
+
+        builder_tool_context.state["hv_builder_v1_output"] = builder_output
+        record_result = record_builder_v1_from_state(builder_tool_context)
+        if not record_result.get("ok"):
+            raise RuntimeError(
+                record_result.get("reason", "Builder V1 CORE recording failed")
+            )
     except Exception as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
@@ -348,6 +356,61 @@ async def run_human_vector_builder_v1(session_id: str, payload: dict):
         "human_authority_preserved": True,
     }
 
+
+
+
+class HumanCognitiveResponseRequest(BaseModel):
+    user_id: str
+    observation: str
+    contradiction: str
+    own_idea: str
+    risks: str
+    critic_questions: str
+
+
+@app.post("/human-vector/sessions/{session_id}/human-response")
+def record_human_vector_cognitive_response(
+    session_id: str,
+    payload: HumanCognitiveResponseRequest,
+) -> dict[str, object]:
+    from dataclasses import asdict
+
+    try:
+        context = session_controller.require_session_for_user(
+            session_id=session_id,
+            user_id=payload.user_id,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    orchestrator = context.orchestrator
+
+    try:
+        draft = orchestrator.record_human_response_draft(
+            observation=payload.observation,
+            contradiction=payload.contradiction,
+            own_idea=payload.own_idea,
+            risks=payload.risks,
+            critic_questions=payload.critic_questions,
+            actor=Actor.HUMAN,
+        )
+        orchestrator.request_human_response_confirmation(actor=Actor.HUMAN)
+        confirmed = orchestrator.confirm_human_response(actor=Actor.HUMAN)
+    except (TransitionRejected, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return {
+        "ok": True,
+        "session_id": session_id,
+        "state": orchestrator.state.value,
+        "revision": orchestrator.revision,
+        "human_response": asdict(confirmed),
+        "draft_response_id": getattr(draft, "response_id", None),
+        "provenance_actor": Actor.HUMAN.value,
+        "final_authority": "HUMAN",
+    }
 
 
 @app.post("/human-vector/sessions/{session_id}/conflict-space")
