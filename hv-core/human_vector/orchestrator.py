@@ -2318,9 +2318,11 @@ class SystemOrchestrator:
             )
 
         expected_ids = {
-            entry.criticism.criticism_id
+            str(entry["criticism"].get("criticism_id", "")).strip()
             for entry in space.entries
-            if entry.criticism is not None
+            if isinstance(entry, dict)
+            and isinstance(entry.get("criticism"), dict)
+            and str(entry["criticism"].get("criticism_id", "")).strip()
         }
 
         normalized: list[dict[str, str]] = []
@@ -2430,6 +2432,14 @@ class SystemOrchestrator:
 
         self.human_critic_selection_artifact = selection
         self.human_critic_selection_history.append(selection)
+
+        # HUMAN has completed the explicit Critic selection.
+        # The next canonical stage is Manual Cognitive Transfer preparation.
+        self.transition(
+            S.MANUAL_TRANSFER_PREPARATION,
+            Actor.HUMAN,
+            "HUMAN Critic Selection completed; Manual Transfer preparation authorized.",
+        )
 
         return selection
 

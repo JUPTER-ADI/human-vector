@@ -298,6 +298,27 @@ def load_session_envelope(path: str | Path) -> dict[str, Any]:
 
     orchestrator = restore_session_snapshot(snapshot)
 
+    # HV_MANUAL_TRANSFER_ITEM_RESTORE_V1
+    _hv_manual_transfer = getattr(orchestrator, "manual_transfer_artifact", None)
+    if _hv_manual_transfer is not None:
+        _hv_items = getattr(_hv_manual_transfer, "items", None)
+        if isinstance(_hv_items, (list, tuple)) and any(
+            isinstance(_hv_item, dict) for _hv_item in _hv_items
+        ):
+            from dataclasses import replace as _hv_dc_replace
+            from human_vector.orchestrator import ManualTransferItem as _HVManualTransferItem
+
+            _hv_restored_items = tuple(
+                _HVManualTransferItem(**_hv_item)
+                if isinstance(_hv_item, dict)
+                else _hv_item
+                for _hv_item in _hv_items
+            )
+            orchestrator.manual_transfer_artifact = _hv_dc_replace(
+                _hv_manual_transfer,
+                items=_hv_restored_items,
+            )
+
     if identity["session_id"] != orchestrator.session_id:
         raise ValueError("Session identity does not match CORE snapshot")
 
