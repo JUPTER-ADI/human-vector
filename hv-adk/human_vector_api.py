@@ -1072,3 +1072,224 @@ def retrieve_human_vector_memory(
         "final_authority": "HUMAN",
     }
 
+# HV_OP03_M05_HUMAN_MEMORY_AUTHORIZATION_API_V1
+class HumanVectorMemoryReviewRequest(BaseModel):
+    user_id: str
+    decisions: list[dict[str, object]]
+
+
+class HumanVectorMemoryTransferBuildRequest(BaseModel):
+    user_id: str
+    transfers: list[dict[str, object]]
+
+
+class HumanVectorMemoryTransferConfirmRequest(BaseModel):
+    user_id: str
+    selection_content_hash: str
+    transfer_content_hash: str
+    confirmation_note: str
+
+
+class HumanVectorMemoryOwnerRequest(BaseModel):
+    user_id: str
+
+
+class HumanVectorNoRelevantMemoryRequest(BaseModel):
+    user_id: str
+    reason: str
+
+
+def _op03_require_owner_session(
+    session_id: str,
+    user_id: str,
+):
+    try:
+        return session_controller.require_session_for_user(
+            session_id=session_id,
+            user_id=user_id,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/human-vector/sessions/{session_id}/memory/review")
+def review_human_vector_memory(
+    session_id: str,
+    request: HumanVectorMemoryReviewRequest,
+) -> dict[str, object]:
+    from dataclasses import asdict
+
+    context = _op03_require_owner_session(
+        session_id,
+        request.user_id,
+    )
+    orchestrator = context.orchestrator
+
+    try:
+        selection = orchestrator.review_memory_candidates(
+            actor=Actor.HUMAN,
+            decisions=request.decisions,
+        )
+    except TransitionRejected as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return {
+        "ok": True,
+        "session_id": context.session_id,
+        "user_id": context.user_id,
+        "state": orchestrator.state.value,
+        "revision": orchestrator.revision,
+        "memory_selection": asdict(selection),
+        "required_next_operation": "HUMAN_BUILD_MEMORY_TRANSFER",
+        "final_authority": "HUMAN",
+    }
+
+
+@app.post("/human-vector/sessions/{session_id}/memory/transfer/build")
+def build_human_vector_memory_transfer(
+    session_id: str,
+    request: HumanVectorMemoryTransferBuildRequest,
+) -> dict[str, object]:
+    from dataclasses import asdict
+
+    context = _op03_require_owner_session(
+        session_id,
+        request.user_id,
+    )
+    orchestrator = context.orchestrator
+
+    try:
+        package = orchestrator.build_memory_transfer_package(
+            actor=Actor.HUMAN,
+            transfers=request.transfers,
+        )
+    except TransitionRejected as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return {
+        "ok": True,
+        "session_id": context.session_id,
+        "user_id": context.user_id,
+        "state": orchestrator.state.value,
+        "revision": orchestrator.revision,
+        "memory_transfer": asdict(package),
+        "required_next_operation": "HUMAN_CONFIRM_MEMORY_TRANSFER",
+        "final_authority": "HUMAN",
+    }
+
+
+@app.post("/human-vector/sessions/{session_id}/memory/transfer/confirm")
+def confirm_human_vector_memory_transfer(
+    session_id: str,
+    request: HumanVectorMemoryTransferConfirmRequest,
+) -> dict[str, object]:
+    from dataclasses import asdict
+
+    context = _op03_require_owner_session(
+        session_id,
+        request.user_id,
+    )
+    orchestrator = context.orchestrator
+
+    try:
+        selection, package = (
+            orchestrator.confirm_memory_selection_and_transfer(
+                actor=Actor.HUMAN,
+                selection_content_hash=request.selection_content_hash,
+                transfer_content_hash=request.transfer_content_hash,
+                confirmation_note=request.confirmation_note,
+            )
+        )
+    except TransitionRejected as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return {
+        "ok": True,
+        "session_id": context.session_id,
+        "user_id": context.user_id,
+        "state": orchestrator.state.value,
+        "revision": orchestrator.revision,
+        "memory_selection": asdict(selection),
+        "memory_transfer": asdict(package),
+        "required_next_operation": "SYSTEM_LOCK_MEMORY_SELECTION",
+        "human_confirmation_recorded": True,
+        "final_authority": "HUMAN",
+    }
+
+
+@app.post("/human-vector/sessions/{session_id}/memory/transfer/lock")
+def lock_human_vector_memory_transfer(
+    session_id: str,
+    request: HumanVectorMemoryOwnerRequest,
+) -> dict[str, object]:
+    from dataclasses import asdict
+
+    context = _op03_require_owner_session(
+        session_id,
+        request.user_id,
+    )
+    orchestrator = context.orchestrator
+
+    try:
+        selection, package = orchestrator.lock_memory_selection(
+            actor=Actor.SYSTEM,
+        )
+    except TransitionRejected as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return {
+        "ok": True,
+        "session_id": context.session_id,
+        "user_id": context.user_id,
+        "state": orchestrator.state.value,
+        "revision": orchestrator.revision,
+        "memory_selection": asdict(selection),
+        "memory_transfer": asdict(package),
+        "required_next_operation": "RECONSTRUCTION_PACKAGE_PREPARATION",
+        "technical_lock_by": "SYSTEM",
+        "final_authority": "HUMAN",
+    }
+
+
+@app.post("/human-vector/sessions/{session_id}/memory/no-relevant")
+def confirm_human_vector_no_relevant_memory(
+    session_id: str,
+    request: HumanVectorNoRelevantMemoryRequest,
+) -> dict[str, object]:
+    context = _op03_require_owner_session(
+        session_id,
+        request.user_id,
+    )
+    orchestrator = context.orchestrator
+
+    try:
+        orchestrator.confirm_no_relevant_memory(
+            actor=Actor.HUMAN,
+            reason=request.reason,
+        )
+    except TransitionRejected as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    return {
+        "ok": True,
+        "session_id": context.session_id,
+        "user_id": context.user_id,
+        "state": orchestrator.state.value,
+        "revision": orchestrator.revision,
+        "human_reason": request.reason,
+        "required_next_operation": "RECONSTRUCTION_PACKAGE_PREPARATION",
+        "final_authority": "HUMAN",
+    }
+
