@@ -1293,3 +1293,218 @@ def confirm_human_vector_no_relevant_memory(
         "final_authority": "HUMAN",
     }
 
+# HV_OP03_M06_RECONSTRUCTION_PACKAGE_API_V1
+class HumanVectorReconstructionOwnerRequest(BaseModel):
+    user_id: str
+
+
+class HumanVectorReconstructionConfirmRequest(BaseModel):
+    user_id: str
+    package_content_hash: str
+    confirmation_note: str
+
+
+@app.post(
+    "/human-vector/sessions/{session_id}/reconstruction-package/build"
+)
+def build_human_vector_reconstruction_package(
+    session_id: str,
+    request: HumanVectorReconstructionOwnerRequest,
+) -> dict[str, object]:
+    from dataclasses import asdict
+
+    context = _op03_require_owner_session(
+        session_id,
+        request.user_id,
+    )
+    orchestrator = context.orchestrator
+
+    if orchestrator.state in {
+        S.MEMORY_SELECTION_LOCKED,
+        S.NO_RELEVANT_MEMORY,
+    }:
+        try:
+            orchestrator.transition(
+                S.RECONSTRUCTION_PACKAGE_PREPARATION,
+                Actor.ORCHESTRATOR,
+            )
+        except TransitionRejected as exc:
+            raise HTTPException(
+                status_code=409,
+                detail=str(exc),
+            ) from exc
+
+    try:
+        package = orchestrator.build_final_reconstruction_package(
+            actor=Actor.ORCHESTRATOR,
+        )
+    except TransitionRejected as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=str(exc),
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=str(exc),
+        ) from exc
+
+    return {
+        "ok": True,
+        "session_id": context.session_id,
+        "user_id": context.user_id,
+        "state": orchestrator.state.value,
+        "revision": orchestrator.revision,
+        "reconstruction_package": asdict(package),
+        "required_next_operation":
+            "HUMAN_CONFIRM_RECONSTRUCTION_PACKAGE",
+        "final_authority": "HUMAN",
+    }
+
+
+@app.post(
+    "/human-vector/sessions/{session_id}/reconstruction-package/confirm"
+)
+def confirm_human_vector_reconstruction_package(
+    session_id: str,
+    request: HumanVectorReconstructionConfirmRequest,
+) -> dict[str, object]:
+    from dataclasses import asdict
+
+    context = _op03_require_owner_session(
+        session_id,
+        request.user_id,
+    )
+    orchestrator = context.orchestrator
+
+    try:
+        package = orchestrator.confirm_final_reconstruction_package(
+            actor=Actor.HUMAN,
+            package_content_hash=request.package_content_hash,
+            confirmation_note=request.confirmation_note,
+        )
+    except TransitionRejected as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=str(exc),
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=str(exc),
+        ) from exc
+
+    return {
+        "ok": True,
+        "session_id": context.session_id,
+        "user_id": context.user_id,
+        "state": orchestrator.state.value,
+        "revision": orchestrator.revision,
+        "reconstruction_package": asdict(package),
+        "human_confirmation_recorded": True,
+        "confirmed_content_hash": package.confirmed_content_hash,
+        "required_next_operation":
+            "SYSTEM_LOCK_RECONSTRUCTION_PACKAGE",
+        "final_authority": "HUMAN",
+    }
+
+
+@app.post(
+    "/human-vector/sessions/{session_id}/reconstruction-package/lock"
+)
+def lock_human_vector_reconstruction_package(
+    session_id: str,
+    request: HumanVectorReconstructionOwnerRequest,
+) -> dict[str, object]:
+    from dataclasses import asdict
+
+    context = _op03_require_owner_session(
+        session_id,
+        request.user_id,
+    )
+    orchestrator = context.orchestrator
+
+    try:
+        package = orchestrator.lock_final_reconstruction_package(
+            actor=Actor.SYSTEM,
+        )
+    except TransitionRejected as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=str(exc),
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=str(exc),
+        ) from exc
+
+    return {
+        "ok": True,
+        "session_id": context.session_id,
+        "user_id": context.user_id,
+        "state": orchestrator.state.value,
+        "revision": orchestrator.revision,
+        "reconstruction_package": asdict(package),
+        "technical_lock_by": "SYSTEM",
+        "required_next_operation": "RECONSTRUCTION_RUNNING",
+        "final_authority": "HUMAN",
+    }
+
+# HV_OP03_M06_HUMAN_ITERATION_DECISION_API_V1
+class HumanVectorIterationDecisionRequest(BaseModel):
+    user_id: str
+    reason: str
+    evolved_criteria: str
+    requested_changes: str
+
+
+@app.post(
+    "/human-vector/sessions/{session_id}/iteration-decision"
+)
+def record_human_vector_iteration_decision(
+    session_id: str,
+    request: HumanVectorIterationDecisionRequest,
+) -> dict[str, object]:
+    from dataclasses import asdict
+
+    context = _op03_require_owner_session(
+        session_id,
+        request.user_id,
+    )
+    orchestrator = context.orchestrator
+
+    try:
+        from human_vector_agent.hv_human_driver import (
+            submit_human_iteration_decision,
+        )
+
+        decision = submit_human_iteration_decision(
+            orchestrator,
+            reason=request.reason,
+            evolved_criteria=request.evolved_criteria,
+            requested_changes=request.requested_changes,
+        )
+    except TransitionRejected as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=str(exc),
+        ) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=str(exc),
+        ) from exc
+
+    return {
+        "ok": True,
+        "session_id": context.session_id,
+        "user_id": context.user_id,
+        "state": orchestrator.state.value,
+        "revision": orchestrator.revision,
+        "iteration_decision": asdict(decision),
+        "required_next_operation":
+            "BUILD_RECONSTRUCTION_PACKAGE",
+        "final_authority": "HUMAN",
+    }
+
