@@ -103,6 +103,43 @@ def _restore_typed_value(value: Any, target_type: Any) -> Any:
         return None
 
     origin = get_origin(target_type)
+
+    # HV_GENERIC_TYPED_COLLECTION_RESTORE_V1
+    # JSON snapshots turn tuples/sets into JSON arrays. Restore both
+    # the declared collection type and the declared nested element type.
+    if origin in (list, tuple, set):
+        args = get_args(target_type)
+
+        if origin is tuple:
+            if len(args) == 2 and args[1] is Ellipsis:
+                item_type = args[0]
+                return tuple(
+                    _restore_typed_value(item, item_type)
+                    for item in value
+                )
+
+            if args:
+                if len(value) != len(args):
+                    raise ValueError(
+                        "Fixed-length tuple restore length mismatch."
+                    )
+                return tuple(
+                    _restore_typed_value(item, item_type)
+                    for item, item_type in zip(value, args)
+                )
+
+            return tuple(value)
+
+        item_type = args[0] if args else Any
+        restored = [
+            _restore_typed_value(item, item_type)
+            for item in value
+        ]
+
+        if origin is set:
+            return set(restored)
+
+        return restored
     args = get_args(target_type)
 
     if origin in (list,):

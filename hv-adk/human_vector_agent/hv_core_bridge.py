@@ -1278,3 +1278,182 @@ def retrieve_firestore_memory_candidates_to_core(
         "memory_transfer_performed": False,
         "reconstruction_effect_active": False,
     }
+
+
+# HV_ACTIVE_MEMORY_SERVICE_BRIDGE_V1
+def retrieve_canonical_active_memory_to_core(
+    *,
+    project_id: str,
+    session_id: str,
+    query_context: dict,
+    branch_id: str | None = None,
+    cycle_id: str | None = None,
+    filters: dict | None = None,
+    database: str = "(default)",
+    limit: int = 10,
+    scan_limit: int = 100,
+    min_score: float = 0.0,
+    idempotency_key: str | None = None,
+    client=None,
+) -> dict:
+    """
+    Execute canonical Active Agentic Memory retrieval and materialize
+    its technical result into the currently bound HUMAN VECTOR CORE
+    orchestrator.
+
+    Retrieval is technical only. This function does not perform HUMAN
+    review, memory activation, manual transfer, or reconstruction effect.
+    """
+    from dataclasses import asdict, is_dataclass
+    import json
+
+    from human_vector_agent.active_memory_service import (
+        retrieve_active_memory,
+    )
+
+    result = retrieve_active_memory(
+        project_id=project_id,
+        session_id=session_id,
+        query_context=query_context,
+        branch_id=branch_id,
+        cycle_id=cycle_id,
+        filters=filters,
+        database=database,
+        limit=limit,
+        scan_limit=scan_limit,
+        min_score=min_score,
+        idempotency_key=idempotency_key,
+        client=client,
+    )
+
+    outcome = result["retrieval_outcome"]
+
+    query_basis = json.dumps(
+        query_context,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+
+    core_artifact = None
+    core_candidate_count = 0
+
+    if outcome == "CANDIDATES_FOUND":
+        core_candidates = []
+
+        for row in result["retrieval_results"]:
+            item = row["memory_item"]
+
+            warnings = []
+
+            conflict_warning = row.get("conflict_warning")
+            if conflict_warning:
+                warnings.append(str(conflict_warning))
+
+            outdated_warning = row.get("outdated_warning")
+            if outdated_warning:
+                warnings.append(str(outdated_warning))
+
+            warnings.extend(
+                [
+                    "COGNITIVE_MEMORY_NOT_AUTHORIZED",
+                    "REQUIRES_HUMAN_MEMORY_REVIEW",
+                ]
+            )
+
+            provenance = json.dumps(
+                {
+                    "memory_item_id": item.get("id"),
+                    "project_id": item.get("project_id"),
+                    "source_session_id": item.get(
+                        "source_session_id"
+                    ),
+                    "source_branch_id": item.get(
+                        "source_branch_id"
+                    ),
+                    "source_version_id": item.get(
+                        "source_version_id"
+                    ),
+                    "source_object_type": item.get(
+                        "source_object_type"
+                    ),
+                    "source_object_id": item.get(
+                        "source_object_id"
+                    ),
+                    "memory_use_class": item.get(
+                        "memory_use_class"
+                    ),
+                    "memory_semantic_type": item.get(
+                        "memory_semantic_type"
+                    ),
+                    "content_hash": item.get(
+                        "content_hash"
+                    ),
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            )
+
+            core_candidates.append(
+                {
+                    "source_id": item["id"],
+                    "source_type": "CANONICAL_MEMORY_ITEM",
+                    "source_actor": item["author_type"],
+                    "source_session_id": item[
+                        "source_session_id"
+                    ],
+                    "original_content": item["content"],
+                    "provenance": provenance,
+                    "retrieval_reason": row[
+                        "relevance_reason"
+                    ],
+                    "relevance_score": row[
+                        "relevance_score"
+                    ],
+                    "warnings": warnings,
+                }
+            )
+
+        core_candidate_count = len(core_candidates)
+
+        core_artifact = _orchestrator.record_memory_candidates(
+            actor=Actor.MEMORY,
+            query_basis=query_basis,
+            candidates=core_candidates,
+        )
+
+    elif outcome == "NO_RELEVANT_CANDIDATE_FOUND":
+        reason = result["retrieval_run"]["outcome_reason"]
+
+        _orchestrator.record_memory_retrieval_outcome(
+            outcome="NO_RELEVANT_CANDIDATE_FOUND",
+            actor=Actor.MEMORY,
+            reason=reason,
+        )
+
+    else:
+        raise RuntimeError(
+            f"Unsupported canonical memory retrieval outcome: {outcome}"
+        )
+
+    if is_dataclass(core_artifact):
+        core_artifact_data = asdict(core_artifact)
+    else:
+        core_artifact_data = core_artifact
+
+    return {
+        "outcome": outcome,
+        "retrieval_run": result["retrieval_run"],
+        "retrieval_results": result["retrieval_results"],
+        "core_candidate_count": core_candidate_count,
+        "core_memory_retrieval_artifact": core_artifact_data,
+        "recorded_by_actor": Actor.MEMORY.value,
+        "human_review_performed": False,
+        "memory_activation_performed": False,
+        "memory_transfer_performed": False,
+        "reconstruction_effect_active": False,
+        "final_authority": "HUMAN",
+    }
