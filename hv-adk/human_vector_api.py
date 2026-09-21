@@ -967,3 +967,108 @@ def get_human_vector_session_results(
         ) is not None,
     }
 
+# HV_OP03_M04_MEMORY_RETRIEVAL_API_V1
+class HumanVectorMemoryRetrieveRequest(BaseModel):
+    user_id: str
+    project_id: str
+    query_context: dict[str, object]
+    branch_id: str | None = None
+    cycle_id: str | None = None
+    filters: dict[str, object] | None = None
+    database: str = "(default)"
+    limit: int = 100
+    min_score: float = 0.0
+    idempotency_key: str | None = None
+
+
+@app.post("/human-vector/sessions/{session_id}/memory/retrieve")
+def retrieve_human_vector_memory(
+    session_id: str,
+    request: HumanVectorMemoryRetrieveRequest,
+) -> dict[str, object]:
+    from human_vector_agent.hv_core_bridge import (
+        retrieve_canonical_active_memory_to_core,
+    )
+
+    try:
+        context = session_controller.require_session_for_user(
+            session_id=session_id,
+            user_id=request.user_id,
+        )
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    orchestrator = context.orchestrator
+
+    try:
+        if orchestrator.state is S.TRANSFER_PACKAGE_LOCKED:
+            orchestrator.transition(
+                S.MEMORY_RETRIEVAL_READY,
+                actor=Actor.ORCHESTRATOR,
+                reason="HUMAN VECTOR API entered canonical Active Memory.",
+            )
+
+        if orchestrator.state is S.MEMORY_RETRIEVAL_READY:
+            orchestrator.transition(
+                S.MEMORY_RETRIEVAL_RUNNING,
+                actor=Actor.ORCHESTRATOR,
+                reason="HUMAN VECTOR API started canonical Active Memory retrieval.",
+            )
+
+        if orchestrator.state is not S.MEMORY_RETRIEVAL_RUNNING:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Memory retrieval requires "
+                    "TRANSFER_PACKAGE_LOCKED, MEMORY_RETRIEVAL_READY, "
+                    "or MEMORY_RETRIEVAL_RUNNING."
+                ),
+            )
+
+        bind_orchestrator(orchestrator)
+
+        result = retrieve_canonical_active_memory_to_core(
+            project_id=request.project_id,
+            session_id=context.session_id,
+            query_context=request.query_context,
+            branch_id=request.branch_id,
+            cycle_id=request.cycle_id,
+            filters=request.filters,
+            database=request.database,
+            limit=request.limit,
+            min_score=request.min_score,
+            idempotency_key=request.idempotency_key,
+        )
+
+    except HTTPException:
+        raise
+    except TransitionRejected as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    outcome = result.get("outcome")
+
+    if outcome == "CANDIDATES_FOUND":
+        required_next_operation = "HUMAN_MEMORY_REVIEW"
+    elif outcome == "NO_RELEVANT_CANDIDATE_FOUND":
+        required_next_operation = "HUMAN_CONFIRM_NO_RELEVANT_MEMORY"
+    else:
+        required_next_operation = "HUMAN_MEMORY_RETRIEVAL_REVIEW"
+
+    return {
+        "ok": True,
+        "session_id": context.session_id,
+        "user_id": context.user_id,
+        "state": orchestrator.state.value,
+        "revision": orchestrator.revision,
+        "memory_retrieval": result,
+        "required_next_operation": required_next_operation,
+        "human_review_performed": False,
+        "memory_activation_performed": False,
+        "reconstruction_effect_active": False,
+        "final_authority": "HUMAN",
+    }
+
