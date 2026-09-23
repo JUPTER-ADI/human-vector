@@ -2,6 +2,12 @@ from __future__ import annotations
 
 from google.adk.runners import InMemoryRunner
 from google.genai import types
+from human_vector_agent.canonical_selector import (
+    SelectorDecision,
+    CanonicalAssessment,
+    evaluate_canonical_selector,
+    build_builder_reconstruction_package,
+)
 from human_vector_agent.agent import builder_v1_agent
 
 from fastapi import HTTPException
@@ -343,6 +349,142 @@ async def run_human_vector_builder_v1(session_id: str, payload: dict):
             raise RuntimeError("Builder V1 produced no exact ADK session output")
 
         builder_tool_context.state["hv_builder_v1_output"] = builder_output
+
+        # OP03_M06_BUILDER_V1_CANONICAL_SELECTOR_GATE
+        # OP03_M06_CANONICAL_SELECTOR_RECONSTRUCTION_LOOP
+        from human_vector_agent.canonical_selector import (
+            evaluate_builder_output as _canonical_selector,
+        )
+
+        selector_max_rounds = 4
+        selector_round = 0
+        selected_builder_output = builder_output
+        selector_trace = []
+
+        while True:
+            selector_round += 1
+
+            selector_model = getattr(
+                builder_v1_agent,
+                "model",
+                None,
+            )
+
+            if not isinstance(selector_model, str):
+                selector_model = getattr(
+                    selector_model,
+                    "model",
+                    None,
+                )
+
+            selector_assessment, selector_result = (
+                await _canonical_selector(
+                    builder_output=selected_builder_output,
+                    human_request=builder_input,
+                    locked_human_direction=(
+                        builder_tool_context.state.get(
+                            "hv_builder_direction_package"
+                        )
+                    ),
+                    model_name=selector_model,
+                )
+            )
+
+            selector_trace.append({
+                "round": selector_round,
+                "decision": selector_result.decision.value,
+                "reasons": list(selector_result.reasons),
+                "reconstruction_requirements": list(
+                    selector_result.reconstruction_requirements
+                ),
+                "provenance": selector_result.provenance,
+            })
+
+            builder_tool_context.state[
+                "hv_canonical_selector_result"
+            ] = selector_trace[-1]
+
+            if selector_result.decision is SelectorDecision.PASS:
+                builder_output = selected_builder_output
+                builder_tool_context.state[
+                    "hv_builder_v1_output"
+                ] = builder_output
+                break
+
+            if selector_result.decision is SelectorDecision.ESCALATE:
+                builder_tool_context.state[
+                    "hv_selector_requires_human_input"
+                ] = True
+
+                builder_output = selected_builder_output
+                builder_tool_context.state[
+                    "hv_builder_v1_output"
+                ] = builder_output
+
+                break
+
+            if selector_round >= selector_max_rounds:
+                raise RuntimeError(
+                    "Canonical Selector did not PASS Builder output "
+                    f"after {selector_max_rounds} rounds."
+                )
+
+            reconstruction_package = build_builder_reconstruction_package(
+                original_builder_output=selected_builder_output,
+                critic_output=None,
+                selector_result=selector_result,
+                locked_human_direction=builder_tool_context.state.get(
+                    "hv_builder_direction_package"
+                ),
+                human_request=builder_input,
+            )
+
+            builder_tool_context.state[
+                "hv_builder_reconstruction_package"
+            ] = reconstruction_package
+
+            reconstruction_input = (
+                "Reconstruct your previous Builder result using the "
+                "Canonical Selector package below. Preserve the HUMAN "
+                "request and locked HUMAN direction. Resolve the identified "
+                "problems using your own reasoning. Return a complete "
+                "replacement result.\n\n"
+                + str(reconstruction_package)
+            )
+
+            rebuilt_output = None
+
+            async for event in runner.run_async(
+                user_id=context.user_id,
+                session_id=adk_session.id,
+                new_message=types.Content(
+                    role="user",
+                    parts=[types.Part(text=reconstruction_input)],
+                ),
+            ):
+                content = getattr(event, "content", None)
+                if content is None:
+                    continue
+
+                for part in getattr(content, "parts", []) or []:
+                    text = getattr(part, "text", None)
+                    if text and text.strip():
+                        rebuilt_output = text.strip()
+
+            if not rebuilt_output:
+                raise RuntimeError(
+                    "Builder reconstruction produced no output."
+                )
+
+            selected_builder_output = rebuilt_output
+            builder_tool_context.state[
+                "hv_builder_v1_output"
+            ] = selected_builder_output
+
+        builder_tool_context.state[
+            "hv_canonical_selector_trace"
+        ] = selector_trace
+
         record_result = record_builder_v1_from_state(builder_tool_context)
         if not record_result.get("ok"):
             raise RuntimeError(
@@ -361,7 +503,33 @@ async def run_human_vector_builder_v1(session_id: str, payload: dict):
         "builder_input": builder_input,
         "required_next_operation": "ADK_BUILDER_V1",
         "human_authority_preserved": True,
+        # OP03_M06_SELECTOR_TRACE_API_V1
+        "selector_trace": builder_tool_context.state.get(
+            "hv_canonical_selector_trace", []
+        ),
+        "selector_rounds": len(
+            builder_tool_context.state.get(
+                "hv_canonical_selector_trace", []
+            )
+        ),
+        "selector_decision": (
+            builder_tool_context.state[
+                "hv_canonical_selector_trace"
+            ][-1].get("decision")
+            if builder_tool_context.state.get(
+                "hv_canonical_selector_trace"
+            )
+            else None
+        ),
+        "selector_reconstruction_count": sum(
+            1
+            for item in builder_tool_context.state.get(
+                "hv_canonical_selector_trace", []
+            )
+            if item.get("decision") == "RECONSTRUCT"
+        ),
     }
+
 
 
 
@@ -493,6 +661,42 @@ async def run_human_vector_critic(
             }
         )
 
+        # OP03_M06_CRITIC_RUNNING_RECOVERY
+        existing_orchestrator = context.orchestrator
+
+        if existing_orchestrator.state is S.CRITIC_RUNNING:
+            existing_critic_output = critic_tool_context.state.get(
+                "hv_critic_output"
+            )
+
+            if not existing_critic_output:
+                existing_critic_output = getattr(
+                    existing_orchestrator,
+                    "critic_running_output",
+                    None,
+                )
+
+            if existing_critic_output:
+                critic_tool_context.state[
+                    "hv_critic_output"
+                ] = existing_critic_output
+
+                recovery_result = record_critic_review_from_state(
+                    critic_tool_context
+                )
+
+                if not recovery_result.get("ok"):
+                    raise RuntimeError(
+                        recovery_result.get(
+                            "reason",
+                            "Critic CORE recovery failed",
+                        )
+                    )
+
+                session_controller.save_session(context.session_id)
+
+                return recovery_result
+
         prepare_result = prepare_critic_analysis(
             verified_elements=(
                 "Confirmed HUMAN direction, generated Builder V1, and confirmed "
@@ -554,7 +758,95 @@ async def run_human_vector_critic(
         )
 
         critic_output = critic_session.state.get("hv_critic_output")
-        print(
+
+        # OP03_M06_CANONICAL_SELECTOR_LIVE_V2
+        locked_human_direction = critic_tool_context.state.get(
+            "hv_locked_human_direction"
+        )
+        human_request = critic_tool_context.state.get("hv_human_request")
+
+        criticisms = []
+        if isinstance(critic_output, dict):
+            criticisms = critic_output.get("criticisms") or []
+        elif hasattr(critic_output, "criticisms"):
+            criticisms = getattr(critic_output, "criticisms") or []
+
+        if not isinstance(criticisms, list):
+            criticisms = []
+
+        def _critic_field(item, key, default=""):
+            if isinstance(item, dict):
+                return item.get(key, default)
+            return getattr(item, key, default)
+
+        actionable_criticisms = [
+            item for item in criticisms
+            if str(_critic_field(item, "correction_direction", "")).strip()
+        ]
+
+        verification_criticisms = [
+            item for item in criticisms
+            if str(_critic_field(item, "verification_required", "")).strip().lower()
+            not in ("", "false", "none", "no", "0")
+        ]
+
+        critic_reasons = tuple(
+            str(_critic_field(item, "explanation", "")).strip()
+            for item in actionable_criticisms
+            if str(_critic_field(item, "explanation", "")).strip()
+        )
+
+        critic_requirements = tuple(
+            str(_critic_field(item, "correction_direction", "")).strip()
+            for item in actionable_criticisms
+            if str(_critic_field(item, "correction_direction", "")).strip()
+        )
+
+        assessment = CanonicalAssessment(
+            direction_alignment=bool(locked_human_direction),
+            human_request_alignment=bool(human_request),
+            preserves_human_authority=True,
+            ai_work_sufficient=not bool(actionable_criticisms),
+            critic_found_actionable_gap=bool(actionable_criticisms),
+            critic_gap_relevant=bool(actionable_criticisms),
+            requires_human_input=False,
+            reasons=critic_reasons,
+            reconstruction_requirements=critic_requirements,
+        )
+
+        selector_result = evaluate_canonical_selector(
+            assessment,
+            source="CRITIC_CONFLICT_SPACE",
+        )
+
+        critic_tool_context.state["hv_canonical_selector_result"] = {
+            "decision": selector_result.decision.value,
+            "reasons": list(selector_result.reasons),
+            "reconstruction_requirements": list(
+                selector_result.reconstruction_requirements
+            ),
+            "provenance": selector_result.provenance,
+        }
+
+        if selector_result.decision is SelectorDecision.RECONSTRUCT:
+            reconstruction_package = build_builder_reconstruction_package(
+                original_builder_output=critic_tool_context.state.get(
+                    "hv_builder_output"
+                ),
+                critic_output=critic_output,
+                selector_result=selector_result,
+                locked_human_direction=locked_human_direction,
+                human_request=human_request,
+            )
+            critic_tool_context.state[
+                "hv_builder_reconstruction_package"
+            ] = reconstruction_package
+
+        elif selector_result.decision is SelectorDecision.ESCALATE:
+            critic_tool_context.state[
+                "hv_selector_requires_human_input"
+            ] = True
+            print(
             "D364_CRITIC_OUTPUT_RUNTIME",
             "type=" + type(critic_output).__name__,
             "repr=" + repr(critic_output),
@@ -566,6 +858,10 @@ async def run_human_vector_critic(
             )
 
         critic_tool_context.state["hv_critic_output"] = critic_output
+
+        # OP03_M06_CRITIC_OUTPUT_DURABLE_RECOVERY
+        orchestrator.critic_running_output = critic_output
+        session_controller.save_session(context.session_id)
 
         record_result = record_critic_review_from_state(
             critic_tool_context
