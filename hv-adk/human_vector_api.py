@@ -38,6 +38,8 @@ def human_vector_health() -> dict[str, object]:
 
 from pydantic import BaseModel
 
+from human_vector.active_memory import ActiveMemory
+from human_vector.working_memory import WorkingMemory
 from human_vector.session_controller import SessionController
 from human_vector.orchestrator import S, Actor, TransitionRejected
 from human_vector_agent.hv_core_bridge import (
@@ -361,6 +363,27 @@ async def run_human_vector_builder_v1(session_id: str, payload: dict):
         selected_builder_output = builder_output
         selector_trace = []
 
+        # M07 — temporary internal / working memory.
+        working_memory_payload = builder_tool_context.state.get(
+            "hv_working_memory",
+            {},
+        )
+        working_memory = WorkingMemory.from_dict(
+            working_memory_payload
+        )
+
+        working_cycle = working_memory.open_cycle(
+            cycle_id=(
+                f"{context.session_id}:"
+                f"working-cycle-{len(working_memory.cycles) + 1}"
+            ),
+            human_request=builder_input,
+        )
+
+        builder_tool_context.state[
+            "hv_working_memory"
+        ] = working_memory.to_dict()
+
         while True:
             selector_round += 1
 
@@ -377,6 +400,15 @@ async def run_human_vector_builder_v1(session_id: str, payload: dict):
                     None,
                 )
 
+            working_version = working_cycle.add_builder_version(
+                round=selector_round,
+                content=selected_builder_output,
+            )
+
+            builder_tool_context.state[
+                "hv_working_memory"
+            ] = working_memory.to_dict()
+
             selector_assessment, selector_result = (
                 await _canonical_selector(
                     builder_output=selected_builder_output,
@@ -389,6 +421,18 @@ async def run_human_vector_builder_v1(session_id: str, payload: dict):
                     model_name=selector_model,
                 )
             )
+
+            working_version.apply_selector_result(
+                decision=selector_result.decision.value,
+                reasons=tuple(selector_result.reasons),
+                reconstruction_requirements=tuple(
+                    selector_result.reconstruction_requirements
+                ),
+            )
+
+            builder_tool_context.state[
+                "hv_working_memory"
+            ] = working_memory.to_dict()
 
             selector_trace.append({
                 "round": selector_round,
@@ -405,7 +449,43 @@ async def run_human_vector_builder_v1(session_id: str, payload: dict):
             ] = selector_trace[-1]
 
             if selector_result.decision is SelectorDecision.PASS:
-                builder_output = selected_builder_output
+                active_memory_payload = builder_tool_context.state.get(
+                    "hv_active_memory",
+                    getattr(
+                        orchestrator,
+                        "_hv_active_memory_payload",
+                        {},
+                    ),
+                )
+                active_memory = ActiveMemory.from_dict(
+                    active_memory_payload
+                )
+
+                active_memory_entry = active_memory.record_selector_pass(
+                    entry_id=(
+                        f"{context.session_id}:"
+                        f"revision-{orchestrator.revision}:"
+                        f"selector-round-{selector_round}"
+                    ),
+                    content=selected_builder_output,
+                    selector_decision=selector_result.decision.value,
+                )
+
+                active_memory_snapshot = active_memory.to_dict()
+
+                builder_tool_context.state[
+                    "hv_active_memory"
+                ] = active_memory_snapshot
+
+                setattr(
+                    orchestrator,
+                    "_hv_active_memory_payload",
+                    active_memory_snapshot,
+                )
+
+                # HUMAN receives exactly the PASS content
+                # stored in Active Memory.
+                builder_output = active_memory_entry.content
                 builder_tool_context.state[
                     "hv_builder_v1_output"
                 ] = builder_output

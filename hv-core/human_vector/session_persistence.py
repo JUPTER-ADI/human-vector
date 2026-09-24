@@ -71,6 +71,11 @@ def build_session_envelope(
         "actor_role": actor_role,
     }
     snapshot = build_session_snapshot(orchestrator)
+    snapshot["active_memory"] = getattr(
+        orchestrator,
+        "_hv_active_memory_payload",
+        {},
+    )
 
     return {
         "schema_version": SCHEMA_VERSION,
@@ -234,6 +239,11 @@ def save_session_snapshot(
     destination.parent.mkdir(parents=True, exist_ok=True)
 
     snapshot = build_session_snapshot(orchestrator)
+    snapshot["active_memory"] = getattr(
+        orchestrator,
+        "_hv_active_memory_payload",
+        {},
+    )
 
     with NamedTemporaryFile(
         mode="w",
@@ -260,7 +270,13 @@ def load_session_snapshot(path: str | Path) -> SystemOrchestrator:
     with source.open("r", encoding="utf-8") as file_handle:
         snapshot = json.load(file_handle)
 
-    return restore_session_snapshot(snapshot)
+    orchestrator = restore_session_snapshot(snapshot)
+    setattr(
+        orchestrator,
+        "_hv_active_memory_payload",
+        snapshot.get("active_memory", {}),
+    )
+    return orchestrator
 
 
 def save_session_envelope(
@@ -334,6 +350,11 @@ def load_session_envelope(path: str | Path) -> dict[str, Any]:
         raise ValueError("Session envelope integrity check failed")
 
     orchestrator = restore_session_snapshot(snapshot)
+    setattr(
+        orchestrator,
+        "_hv_active_memory_payload",
+        snapshot.get("active_memory", {}),
+    )
 
     # HV_MANUAL_TRANSFER_ITEM_RESTORE_V1
     _hv_manual_transfer = getattr(orchestrator, "manual_transfer_artifact", None)
