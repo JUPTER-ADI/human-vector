@@ -2317,13 +2317,26 @@ class SystemOrchestrator:
                 "HUMAN Critic Selection requires explicit decisions."
             )
 
-        expected_ids = {
-            str(entry["criticism"].get("criticism_id", "")).strip()
-            for entry in space.entries
-            if isinstance(entry, dict)
-            and isinstance(entry.get("criticism"), dict)
-            and str(entry["criticism"].get("criticism_id", "")).strip()
-        }
+        # OP03_M06_HUMAN_SELECTION_EXPECTED_IDS
+        expected_ids: set[str] = set()
+        for entry in space.entries:
+            if isinstance(entry, dict):
+                criticism = entry.get("criticism")
+                direct_id = entry.get("criticism_id", "")
+            else:
+                criticism = getattr(entry, "criticism", None)
+                direct_id = getattr(entry, "criticism_id", "")
+
+            if isinstance(criticism, dict):
+                raw_id = criticism.get("criticism_id", "")
+            elif criticism is not None:
+                raw_id = getattr(criticism, "criticism_id", "")
+            else:
+                raw_id = direct_id
+
+            criticism_id = str(raw_id or direct_id).strip()
+            if criticism_id:
+                expected_ids.add(criticism_id)
 
         normalized: list[dict[str, str]] = []
         supplied_ids: list[str] = []

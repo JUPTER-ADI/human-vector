@@ -47,6 +47,19 @@ from human_vector_agent.hv_core_bridge import (
     record_critic_review_from_state,
 )
 from human_vector_agent.agent import critic_v1_agent
+from typing import TypedDict
+
+class HumanDirectionRequest(TypedDict):
+    user_id: str
+    objective: str
+    context: str
+    criteria: str
+    limits: str
+
+
+class SessionUserRequest(TypedDict):
+    user_id: str
+
 
 
 session_controller = SessionController()
@@ -194,7 +207,7 @@ def close_human_vector_session(
 @app.post("/human-vector/sessions/{session_id}/direction")
 async def record_human_vector_direction(
     session_id: str,
-    payload: dict[str, object],
+    payload: HumanDirectionRequest,
 ):
     user_id = str(payload.get("user_id", "")).strip()
     if not user_id:
@@ -239,7 +252,7 @@ async def record_human_vector_direction(
 @app.post("/human-vector/sessions/{session_id}/direction/confirm")
 def confirm_human_vector_direction(
     session_id: str,
-    payload: dict[str, object],
+    payload: SessionUserRequest,
 ) -> dict[str, object]:
     user_id = str(payload.get("user_id", "")).strip()
     if not user_id:
@@ -289,7 +302,7 @@ def confirm_human_vector_direction(
 
 
 @app.post("/human-vector/sessions/{session_id}/builder-v1")
-async def run_human_vector_builder_v1(session_id: str, payload: dict):
+async def run_human_vector_builder_v1(session_id: str, payload: SessionUserRequest):
     try:
         context = session_controller.require_session(session_id)
         session_controller.require_session_for_user(session_id=session_id, user_id=payload["user_id"])
@@ -316,6 +329,7 @@ async def run_human_vector_builder_v1(session_id: str, payload: dict):
                 self.state = {}
 
         builder_tool_context = _BuilderV1ApiToolContext()
+        context.tool_context = builder_tool_context  # HV204_SESSION_TOOL_CONTEXT_BINDING
         builder_tool_context.state["hv_core_session_id"] = context.session_id
         builder_input = prepare_builder_v1_direction(builder_tool_context)
 
@@ -491,23 +505,27 @@ async def run_human_vector_builder_v1(session_id: str, payload: dict):
                 ] = builder_output
                 break
 
-            if selector_result.decision is SelectorDecision.ESCALATE:
-                builder_tool_context.state[
-                    "hv_selector_requires_human_input"
-                ] = True
-
-                builder_output = selected_builder_output
-                builder_tool_context.state[
-                    "hv_builder_v1_output"
-                ] = builder_output
-
-                break
 
             if selector_round >= selector_max_rounds:
-                raise RuntimeError(
-                    "Canonical Selector did not PASS Builder output "
-                    f"after {selector_max_rounds} rounds."
+                terminal_reason = (
+                    "Canonical Selector reached the technical cycle limit "
+                    f"after {selector_max_rounds} evaluations without PASS. "
+                    "The rejected Builder output remains isolated from HUMAN."
                 )
+                builder_tool_context.state[
+                    "hv_selector_safe_terminal_reason"
+                ] = terminal_reason
+                builder_tool_context.state[
+                    "hv_canonical_selector_trace"
+                ] = selector_trace
+                return {
+                    "ok": False,
+                    "state": "SELECTOR_SAFE_LIMIT",
+                    "selector_decision": "RECONSTRUCT",
+                    "reason": terminal_reason,
+                    "validated_for_human": False,
+                    "final_authority": "HUMAN",
+                }
 
             reconstruction_package = build_builder_reconstruction_package(
                 original_builder_output=selected_builder_output,
@@ -558,6 +576,14 @@ async def run_human_vector_builder_v1(session_id: str, payload: dict):
 
             selected_builder_output = rebuilt_output
             builder_tool_context.state[
+                "hv_selector_reconstruction_executed_count"
+            ] = int(
+                builder_tool_context.state.get(
+                    "hv_selector_reconstruction_executed_count",
+                    0,
+                )
+            ) + 1
+            builder_tool_context.state[
                 "hv_builder_v1_output"
             ] = selected_builder_output
 
@@ -565,50 +591,41 @@ async def run_human_vector_builder_v1(session_id: str, payload: dict):
             "hv_canonical_selector_trace"
         ] = selector_trace
 
+        # HV_185_CANONICAL_SESSION_STATE_BRIDGE
+        context.tool_context.state["hv_builder_v1_output"] = (
+            builder_tool_context.state.get("hv_builder_v1_output")
+        )
+        context.tool_context.state["hv_canonical_selector_trace"] = (
+            builder_tool_context.state.get("hv_canonical_selector_trace")
+        )
+        context.tool_context.state[
+            "hv_selector_reconstruction_executed_count"
+        ] = builder_tool_context.state.get(
+            "hv_selector_reconstruction_executed_count"
+        )
+
         record_result = record_builder_v1_from_state(builder_tool_context)
         if not record_result.get("ok"):
             raise RuntimeError(
                 record_result.get("reason", "Builder V1 CORE recording failed")
             )
+
+        # HV221 — expose the final Canonical Selector verdict on /builder-v1.
+        final_selector_decision = (
+            selector_trace[-1].get("decision")
+            if selector_trace
+            and isinstance(selector_trace[-1], dict)
+            else None
+        )
+        record_result["selector_decision"] = final_selector_decision
+        record_result["validated_for_human"] = (
+            final_selector_decision == SelectorDecision.PASS.value
+        )
+
+        return record_result
     except Exception as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
-    return {
-        "ok": True,
-        "session_id": context.session_id,
-        "user_id": context.user_id,
-        "state": orchestrator.state.value,
-        "revision": orchestrator.revision,
-        "builder_v1_ready": True,
-        "builder_input": builder_input,
-        "required_next_operation": "ADK_BUILDER_V1",
-        "human_authority_preserved": True,
-        # OP03_M06_SELECTOR_TRACE_API_V1
-        "selector_trace": builder_tool_context.state.get(
-            "hv_canonical_selector_trace", []
-        ),
-        "selector_rounds": len(
-            builder_tool_context.state.get(
-                "hv_canonical_selector_trace", []
-            )
-        ),
-        "selector_decision": (
-            builder_tool_context.state[
-                "hv_canonical_selector_trace"
-            ][-1].get("decision")
-            if builder_tool_context.state.get(
-                "hv_canonical_selector_trace"
-            )
-            else None
-        ),
-        "selector_reconstruction_count": sum(
-            1
-            for item in builder_tool_context.state.get(
-                "hv_canonical_selector_trace", []
-            )
-            if item.get("decision") == "RECONSTRUCT"
-        ),
-    }
 
 
 
@@ -889,7 +906,6 @@ async def run_human_vector_critic(
             ai_work_sufficient=not bool(actionable_criticisms),
             critic_found_actionable_gap=bool(actionable_criticisms),
             critic_gap_relevant=bool(actionable_criticisms),
-            requires_human_input=False,
             reasons=critic_reasons,
             reconstruction_requirements=critic_requirements,
         )
@@ -922,16 +938,6 @@ async def run_human_vector_critic(
                 "hv_builder_reconstruction_package"
             ] = reconstruction_package
 
-        elif selector_result.decision is SelectorDecision.ESCALATE:
-            critic_tool_context.state[
-                "hv_selector_requires_human_input"
-            ] = True
-            print(
-            "D364_CRITIC_OUTPUT_RUNTIME",
-            "type=" + type(critic_output).__name__,
-            "repr=" + repr(critic_output),
-            flush=True,
-        )
         if not critic_output:
             raise RuntimeError(
                 "Critic produced no exact ADK session output"
@@ -1323,6 +1329,16 @@ def get_human_vector_session_results(
     )
 
     return {
+        "builder_output": context.tool_context.state.get("hv_builder_v1_output"),
+        "selector_trace": context.tool_context.state.get("hv_canonical_selector_trace"),
+        "selector_decision": (
+            context.tool_context.state.get("hv_canonical_selector_trace")[-1].get("decision")
+            if isinstance(context.tool_context.state.get("hv_canonical_selector_trace"), list)
+            and bool(context.tool_context.state.get("hv_canonical_selector_trace"))
+            and isinstance(context.tool_context.state.get("hv_canonical_selector_trace")[-1], dict)
+            else None
+        ),
+        "reconstruction_count": context.tool_context.state.get("hv_selector_reconstruction_executed_count"),
         "ok": True,
         "session_id": context.session_id,
         "user_id": context.user_id,

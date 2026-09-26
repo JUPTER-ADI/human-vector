@@ -268,11 +268,6 @@ def record_builder_v1(v1_content: str, tool_context: ToolContext) -> dict:
             actor=Actor.BUILDER_AI,
         )
 
-        _orchestrator.transition(
-            S.HUMAN_RESPONSE_REQUIRED,
-            Actor.ORCHESTRATOR,
-            "V1 recorded; HUMAN cognitive response is required.",
-        )
 
     except TransitionRejected as exc:
         return {
@@ -291,7 +286,7 @@ def record_builder_v1(v1_content: str, tool_context: ToolContext) -> dict:
         "version_label": result.version_label,
         "content_hash": result.content_hash,
         "builder_actor": Actor.BUILDER_AI.value,
-        "human_response_required": True,
+        "human_response_required": False,
         "final_authority": "HUMAN",
     }
 
@@ -472,6 +467,9 @@ def prepare_critic_analysis(
     }
 
 
+
+
+
 def record_critic_review_from_state(
     tool_context: ToolContext,
 ) -> dict:
@@ -525,6 +523,37 @@ def record_critic_review_from_state(
             "critic_output_key": "hv_critic_output",
             "final_authority": "HUMAN",
         }
+
+    # OP03_M06_NORMALIZE_CRITIC_PAYLOAD
+    if hasattr(payload, 'model_dump'):
+        payload = payload.model_dump()
+    elif hasattr(payload, 'dict') and not isinstance(payload, dict):
+        payload = payload.dict()
+
+    if isinstance(payload, str):
+        import ast as _hv_ast
+        import json as _hv_json
+
+        _hv_payload_text = payload.strip()
+
+        if _hv_payload_text.startswith('```'):
+            _hv_lines = _hv_payload_text.splitlines()
+            if _hv_lines and _hv_lines[0].strip().startswith('```'):
+                _hv_lines = _hv_lines[1:]
+            if _hv_lines and _hv_lines[-1].strip() == '```':
+                _hv_lines = _hv_lines[:-1]
+            _hv_payload_text = '\n'.join(_hv_lines).strip()
+
+        try:
+            payload = _hv_json.loads(_hv_payload_text)
+        except Exception:
+            try:
+                payload = _hv_ast.literal_eval(_hv_payload_text)
+            except Exception:
+                pass
+
+    if isinstance(payload, list):
+        payload = {'criticisms': payload}
 
     if not isinstance(payload, dict):
         return {

@@ -8,7 +8,6 @@ from typing import Any
 class SelectorDecision(str, Enum):
     PASS = "PASS"
     RECONSTRUCT = "RECONSTRUCT"
-    ESCALATE = "ESCALATE"
 
 
 @dataclass(frozen=True)
@@ -24,8 +23,6 @@ class CanonicalAssessment:
     critic_gap_relevant: bool = False
 
     # True only when continuation genuinely requires HUMAN input.
-    requires_human_input: bool = False
-
     reasons: tuple[str, ...] = ()
     reconstruction_requirements: tuple[str, ...] = ()
 
@@ -51,7 +48,6 @@ def evaluate_canonical_selector(
     It decides whether an AI result:
       PASS        -> is suitable for HUMAN presentation;
       RECONSTRUCT -> must return to AI for stronger reconstruction;
-      ESCALATE    -> genuinely requires HUMAN input before AI can continue.
 
     Critic output is evidence for the Selector.
     Critic output is not routing authority.
@@ -70,20 +66,11 @@ def evaluate_canonical_selector(
         "ai_work_sufficient": assessment.ai_work_sufficient,
         "critic_found_actionable_gap": assessment.critic_found_actionable_gap,
         "critic_gap_relevant": assessment.critic_gap_relevant,
-        "requires_human_input": assessment.requires_human_input,
     }
 
     # HUMAN input is requested only when AI cannot legitimately continue
     # without a HUMAN choice, preference, value judgment or missing fact
     # that only HUMAN can supply.
-    if assessment.requires_human_input:
-        return CanonicalSelectorResult(
-            decision=SelectorDecision.ESCALATE,
-            reasons=assessment.reasons or (
-                "Continuation genuinely requires HUMAN input.",
-            ),
-            provenance=provenance,
-        )
 
     reasons: list[str] = list(assessment.reasons)
     requirements: list[str] = list(
@@ -233,7 +220,6 @@ async def evaluate_builder_output(
         "ai_work_sufficient: boolean\n"
         "critic_found_actionable_gap: boolean\n"
         "critic_gap_relevant: boolean\n"
-        "requires_human_input: boolean\n"
         "reasons: array of strings\n"
         "reconstruction_requirements: array of strings\n\n"
 
@@ -293,7 +279,6 @@ async def evaluate_builder_output(
         "ai_work_sufficient",
         "critic_found_actionable_gap",
         "critic_gap_relevant",
-        "requires_human_input",
     )
 
     for field in bool_fields:
@@ -329,9 +314,6 @@ async def evaluate_builder_output(
         ],
         critic_gap_relevant=payload[
             "critic_gap_relevant"
-        ],
-        requires_human_input=payload[
-            "requires_human_input"
         ],
         reasons=tuple(
             str(x).strip()
