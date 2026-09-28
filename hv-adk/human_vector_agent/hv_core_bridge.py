@@ -268,6 +268,12 @@ def record_builder_v1(v1_content: str, tool_context: ToolContext) -> dict:
             actor=Actor.BUILDER_AI,
         )
 
+        _orchestrator.transition(
+            S.HUMAN_RESPONSE_REQUIRED,
+            Actor.SYSTEM,
+            "Builder V1 recorded; HUMAN cognitive response required.",
+        )
+
 
     except TransitionRejected as exc:
         return {
